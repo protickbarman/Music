@@ -21,17 +21,22 @@ npm test
 
 `test-unified-api.js` checks the player-cipher paths, provider resolvers, GDStudio source interleaving, stream validation/proxying, exact-match fallback, and rejection of a same-title result from a different artist. `test-xroMusic-all.js` exercises all 40 public client operations.
 
-## Quick example
+## One-import app module
+
+`music-app.js` is the high-level entry point. It initializes automatically, searches all catalogs by default, chooses a YouTube Music result first, and resolves a stream with match-gated GDStudio/Kugou fallback. It also exposes the inherited lyrics, queue, library, playlists, charts, and other client methods.
 
 ```js
-import xroMusic from "./xroMusic.js";
+import musicApp from "./music-app.js";
 
-const catalogs = await xroMusic.search("বাংলা গান", { source: "all", limit: 10 });
-const track = await xroMusic.gdStudioSearch("song title artist", { source: "netease" });
-const stream = await xroMusic.gdStudioStream(track[0], { quality: "999" });
+await musicApp.ready;
+const catalogs = await musicApp.search("বাংলা গান", { limit: 10 });
+const stream = await musicApp.play("artist - song title");
+const lyrics = await musicApp.lyricsFor("artist - song title");
+
+// stream.streamUrl is ready for your app's audio player when a full track resolves.
 ```
 
-For a YouTube Music track, `xroMusic.stream(videoId, { title, artist, durationSeconds })` uses the YouTube client waterfall first, then only accepts a sufficiently matched external full-track candidate.
+`musicApp.play(track)` also accepts a selected catalog result. Deezer is preview-only; `allowPreview: true` must be opted into explicitly. Use `createMusicApp(options)` when you need a separate instance or a custom `fetchImpl`.
 
 ## Optional YouTube Music authentication
 

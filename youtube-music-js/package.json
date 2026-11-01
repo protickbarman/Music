@@ -3,17 +3,26 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "types": "./music-app.d.ts",
   "engines": {
     "node": ">=18"
   },
   "exports": {
-    ".": "./xroMusic.js",
+    ".": {
+      "types": "./music-app.d.ts",
+      "import": "./music-app.js"
+    },
+    "./client": {
+      "types": "./xroMusic.d.ts",
+      "import": "./xroMusic.js"
+    },
     "./core": "./unified-music-api.js",
     "./resolvers": "./music-source-resolvers.js"
   },
   "scripts": {
-    "test": "npm run test:api && npm run test:client",
+    "test": "npm run test:api && npm run test:client && npm run test:app",
     "test:api": "node test-unified-api.js",
-    "test:client": "node test-xroMusic-all.js"
+    "test:client": "node test-xroMusic-all.js",
+    "test:app": "node test-music-app.js"
   }
 }
