@@ -50,7 +50,7 @@ The export is filtered to unexpired `youtube.com` cookies and scoped to YouTube 
 
 ## Live test on your machine
 
-The included live diagnostic makes real YouTube Music requests and validates the resolved stream URL. Run it from this directory on a machine that can reach YouTube; it prints no cookie, auth header, or stream URL:
+The included live diagnostic makes real YouTube Music search/playback requests. If a YouTube stream resolves, it tail-range validates that URL; if an alternate provider is used, the output labels it. Run it from this directory on a machine that can reach YouTube; it prints no cookie, auth header, or stream URL:
 
 ```sh
 YTM_COOKIE_FILE="/private/path/cookies.json" npm run test:live -- "Blinding Lights The Weeknd"
