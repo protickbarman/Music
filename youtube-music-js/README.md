@@ -48,6 +48,16 @@ YTM_COOKIE_FILE="/private/path/cookies.json" node app.js
 
 The export is filtered to unexpired `youtube.com` cookies and scoped to YouTube Music. When a supported SAPISID cookie is present, the client computes the InnerTube `SAPISIDHASH` authorization header in memory. Keep the file outside the repository, never paste it into chat, and never commit it; cookie exports grant account access. Authentication can enable supported account-specific requests, but it cannot guarantee playback for every track or region.
 
+## Live test on your machine
+
+The included live diagnostic makes real YouTube Music requests and validates the resolved stream URL. Run it from this directory on a machine that can reach YouTube; it prints no cookie, auth header, or stream URL:
+
+```sh
+YTM_COOKIE_FILE="/private/path/cookies.json" npm run test:live -- "Blinding Lights The Weeknd"
+```
+
+`npm test` remains mock-backed. A successful public search does not by itself prove that YouTube accepted the cookie. This sandbox cannot make outbound YouTube requests, so I can verify the script and local integration here, but the live check must be run from your network.
+
 ## Bundled runtime data
 
 The client uses checked-in player/cipher fixtures for local cipher operation and deterministic tests:

@@ -23,6 +23,7 @@
     "test": "npm run test:api && npm run test:client && npm run test:app",
     "test:api": "node test-unified-api.js",
     "test:client": "node test-xroMusic-all.js",
-    "test:app": "node test-music-app.js"
+    "test:app": "node test-music-app.js",
+    "test:live": "node live-test.js"
   }
 }
