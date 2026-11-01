@@ -24,15 +24,15 @@
    - [6.1 Multi-Client Stream Waterfall & Format Ranking (`selectBestAudioFormat`)](#61-multi-client-stream-waterfall--format-ranking-selectbestaudioformat)
    - [6.2 Last-256-Byte Tail Probe (`validateStreamUrl`) — Blocking 1 MiB-Capped Streams](#62-last-256-byte-tail-probe-validatestreamurl--blocking-1-mib-capped-streams)
    - [6.3 Loopback 4 MiB Bounded-Range Audio Proxy (`BoundedRangeAudioProxy`)](#63-loopback-4-mib-bounded-range-audio-proxy-boundedrangeaudioproxy)
-7. [JioSaavn Complete API, OpenSSL 3.0 `des-ede3` 320kbps Decryption & Geo-Block Bypass](#7-jiosaavn-complete-api-openssl-30-des-ede3-320kbps-decryption--geo-block-bypass)
-   - [7.1 Complete JioSaavn Endpoint Status Table (`jiosaavn.com/api.php`)](#71-complete-jiosaavn-endpoint-status-table-jiosaavncomapiphp)
-   - [7.2 OpenSSL 3.0 Native 320kbps AAC Decryption (`des-ede3` Key `"38346591"`)](#72-openssl-30-native-320kbps-aac-decryption-des-ede3-key-38346591)
-   - [7.3 The Artist-Playlist Geo-Block Bypass (`JIOSAAVN_320_BYPASS`)](#73-the-artist-playlist-geo-block-bypass-jiosaavn_320_bypass)
+7. [GDStudio + Kugou Full-Track Search & Streaming, with Deezer Catalog Enrichment](#7-gdstudio--kugou-full-track-search--streaming-with-deezer-catalog-enrichment)
+   - [7.1 GDStudio / NetEase & Bilibili Search, Full Streams, Lyrics, Covers & Charts](#71-gdstudio--netease--bilibili-search-full-streams-lyrics-covers--charts)
+   - [7.2 Kugou Signed Search, Free-Track Streams & KRC Lyrics](#72-kugou-signed-search-free-track-streams--krc-lyrics)
+   - [7.3 Deezer Public Catalog & Match-Gated Provider Fallback](#73-deezer-public-catalog--match-gated-provider-fallback)
 8. [Internet Archive (`archive.org`) DRM-Free MP3 & Lossless FLAC API](#8-internet-archive-archiveorg-drm-free-mp3--lossless-flac-api)
-9. [6-Provider Synced Lyrics Waterfall (Word-by-Word TTML, KPOE JSON & LRC)](#9-6-provider-synced-lyrics-waterfall-word-by-word-ttml-kpoe-json--lrc)
+9. [YouTube Music + 7-Provider Synced Lyrics Waterfall (Word-by-Word TTML, KPOE JSON & LRC)](#9-youtube-music--7-provider-synced-lyrics-waterfall-word-by-word-ttml-kpoe-json--lrc)
 10. [Spotify Keyless Embed Importer, ListenBrainz & Last.fm Scrobbling](#10-spotify-keyless-embed-importer-listenbrainz--lastfm-scrobbling)
-11. [Complete `xroMusic` Client API Reference (`xroMusic.*` — All 35 Operations)](#11-complete-xromusic-client-api-reference-xromusic--all-35-operations)
-12. [Live Case Study: Maroon 5 — "Memories" Complete Multi-Source Payload](#12-live-case-study-maroon-5--memories-complete-multi-source-payload)
+11. [Complete `xroMusic` Client API Reference (`xroMusic.*` — 40 Tested Operations)](#11-complete-xromusic-client-api-reference-xromusic--40-tested-operations)
+12. [Live Case Study: Maroon 5 — "Memories" Multi-Source Catalog Record](#12-live-case-study-maroon-5--memories-multi-source-catalog-record)
 13. [Step-by-Step Full-Stack App Implementation Guide (Backend + Frontend)](#13-step-by-step-full-stack-app-implementation-guide-backend--frontend)
 
 ---
@@ -43,9 +43,10 @@ All implementation code, player bundles, cipher registries, and tests are locate
 
 | Path | Description |
 | :--- | :--- |
-| `/home/user/Music/youtube-music-js/xroMusic.js` | **Main `xroMusic` Client Module** exposing all 35 operations (`xroMusic.init`, `xroMusic.search`, `xroMusic.stream`, `xroMusic.lyrics`, `xroMusic.saavn*`, `xroMusic.archive*`, `xroMusic.queue.*`, `xroMusic.library.*`, etc.). |
+| `/home/user/Music/youtube-music-js/xroMusic.js` | **Main `xroMusic` Client Module** exposing 40 tested operations across YouTube Music, GDStudio, Kugou, Deezer, Internet Archive, synced lyrics, queue, library, and scrobbling. |
 | `/home/user/Music/youtube-music-js/xroMusic.d.ts` | Full TypeScript type declarations for `xroMusic`. |
-| `/home/user/Music/youtube-music-js/unified-music-api.js` | Core engine implementing `UniversalCipherEngine`, `BoundedRangeAudioProxy`, `StreamFetchManager`, `UnifiedMusicAPI`, `decryptJioSaavnMediaUrl`, `validateStreamUrl`, and `resolveSyncedLyrics`. |
+| `/home/user/Music/youtube-music-js/unified-music-api.js` | Core engine implementing YouTube ciphering, `BoundedRangeAudioProxy`, `StreamFetchManager`, `UnifiedMusicAPI`, provider matching, and synced lyrics. |
+| `/home/user/Music/youtube-music-js/music-source-resolvers.js` | GDStudio, Kugou, and Deezer catalog/stream resolver implementations. |
 | `/home/user/Music/youtube-music-js/test-xroMusic-all.js` | Automated end-to-end test suite verifying all `xroMusic.*` operations (`node youtube-music-js/test-xroMusic-all.js`). |
 | `/home/user/Music/youtube-music-js/test-unified-api.js` | Low-level unit tests for ES5/ES6 `base.js` ciphering, `11a45ffb` registry lookup, `sw.js_data` parsing, tail-range validation, and 4 MiB proxy chunking. |
 | `/home/user/Music/youtube-music-js/cipher-configs/` | `faraday_player_configs.json`, `zemer_player_configs.json`, `limusic_bundled_cipher_configs.json`, `player-registry.json`, `innertube_clients.json`, `po_token.html`. |
@@ -61,15 +62,15 @@ All implementation code, player bundles, cipher registries, and tests are locate
 ```text
 ┌───────────────────────────────────────────────────────────────────────────────────┐
 │                               xroMusic Client API                                 │
-│  xroMusic.search() | xroMusic.stream() | xroMusic.lyrics() | xroMusic.saavnStream │
+│  xroMusic.search() | xroMusic.stream() | xroMusic.lyrics() | xroMusic.gdStudioStream() │
 └───────────────┬───────────────────────────────┬───────────────────────┬───────────┘
                 │                               │                       │
       ┌─────────▼──────────┐         ┌──────────▼──────────┐   ┌────────▼────────┐
       │ 1. CATALOG ENGINE  │         │  2. STREAM ENGINE   │   │ 3. LYRICS ENGINE│
       │ - YTM (WEB_REMIX)  │         │  - Multi-Client YT  │   │ - Boidu (TTML)  │
-      │ - JioSaavn API v4  │         │  - JioSaavn 320 AAC │   │ - LyricsPlus    │
-      │ - Internet Archive │         │  - Internet Archive │   │ - YTM IOS_MUSIC │
-      │ - Spotify Embed    │         │  - StreamFetchCache │   │ - Kugou / 163   │
+      │ - GDStudio search  │         │  - GDStudio FLAC/MP3│   │ - LyricsPlus    │
+      │ - Kugou + Deezer   │         │  - Kugou (free)     │   │ - GDStudio/KRC  │
+      │ - Internet Archive │         │  - Archive/Cache   │   │ - YTM / 163 / QQ│
       └────────────────────┘         └──────────┬──────────┘   └─────────────────┘
                                                 │
                        ┌────────────────────────▼────────────────────────┐
@@ -97,9 +98,9 @@ All implementation code, player bundles, cipher registries, and tests are locate
 | **3** | **ES5 (`player_ias`) vs. ES6 (`player_es6`) Cipher Regex Mismatch**: `Reserver-YTB-Web` only matched ES6 default arguments `function(a,b="",c="")`, failing on `player_ias` where Closure Compiler emits `m=m===void 0?"":m`. | `Reserver-YTB-Web`, `ytmusic.js`, `innertube.js` | **`UniversalCipherEngine`** uses `UNIVERSAL_URL_BUILDER_REGEX` (matching both ES5 and ES6 `.set("alr","yes")` URL builders) + `node:vm` prototype invocation + Faraday/Zemer `player_configs.json` fallback. |
 | **4** | **`googlevideo.com` Open-Ended Range Throttling (~32 KB/s)**: Standard `<audio>`, `mpv`, and `ffmpeg` players send `Range: bytes=0-` (open-ended), which `googlevideo.com` throttles to ~2x realtime even when `n` is transformed. | Almost all web/desktop players | **`BoundedRangeAudioProxy`** runs a local loopback server that intercepts open-ended requests and fetches **4 MiB bounded byte ranges (`Range: bytes=X-Y`)** upstream at full CDN speed (~9.4 MB/s). |
 | **5** | **User Uploads Returning `403` or Expiring in 32 Seconds**: Private uploads stream from `*.c.youtube.com` (not `*.googlevideo.com`) and expire in 32s without `playlistId: "MLPT"`. | Most InnerTube wrappers | Passes `playlistId: "MLPT"` for uploads, uses `UPLOAD_FALLBACK_ORDER` (`WEB_REMIX` $\rightarrow$ `TVHTML5` $\rightarrow$ `WEB_CREATOR`), and recognizes `*.c.youtube.com` in `isYouTubeStreamHost()`. |
-| **6** | **OpenSSL 3.0 / Node 18–22+ Crash on JioSaavn DES-ECB**: `crypto.createDecipheriv("des-ecb", ...)` throws `ERR_OSSL_EVP_UNSUPPORTED` on modern Node.js. | Node.js JioSaavn backends | Uses **Triple-DES EDE3 (`des-ede3`) with `K1 = K2 = K3 = "38346591"`** (`Buffer.from("38346591".repeat(3))`). Since $D_K(E_K(D_K(x))) \equiv D_K(x)$, it is mathematically identical to Single DES-ECB and runs natively in OpenSSL 3.0 with zero flags or dependencies. |
-| **7** | **JioSaavn Geo-Blocked / Hidden Western Songs**: `search.getResults` hides tracks like Maroon 5's `"Memories"` (`rights.reason: "Unavailable"`) and only returns instrumental covers. | `Tuneify`, `WhiteHole`, `Music-Aura` | **`JIOSAAVN_320_BYPASS`** chains `autocomplete.get` $\rightarrow$ `playlist.getDetails` $\rightarrow$ `song.getDetails`, which still returns the original track's `encrypted_media_url` (`-RWAZc5D`) and decrypts to a working 320kbps AAC CDN URL. |
-| **8** | **Lyrics Provider Outages (`lrclib.net` 502, `simpmusic` 403)**: Single-provider lyrics clients fail when `lrclib.net` is down. | Apps relying only on LRCLIB | **6-Provider Synced Lyrics Waterfall**: Boidu (`lyrics-api.boidu.dev/getLyrics` Apple Music word-timed TTML) $\rightarrow$ LyricsPlus $\rightarrow$ InnerTube `IOS_MUSIC` $\rightarrow$ Kugou $\rightarrow$ NetEase $\rightarrow$ QQ Music $\rightarrow$ LRCLIB. |
+| **6** | **Catalog gaps and provider outages**: a single source can omit regions, specific tracks, or quality tiers. | Single-source music clients | Searches YouTube Music, GDStudio, Kugou, Deezer, and Internet Archive; playback fallback is gated by title/artist/duration matching rather than blindly accepting the first result. No one public endpoint is claimed to have every track. |
+| **7** | **Preview mistaken for full-song audio**: Deezer catalog objects include short preview URLs. | Catalog clients | Deezer is metadata/ISRC/artwork/chart enrichment only; full-track fallback uses GDStudio or eligible free Kugou streams. Locked tracks are not bypassed. |
+| **8** | **Lyrics Provider Outages (`lrclib.net` 502, `simpmusic` 403)**: Single-provider lyrics clients fail when one source is down. | Apps relying only on one lyrics API | **Seven external synced-lyrics fallbacks**: Boidu, LyricsPlus, GDStudio, Kugou KRC, NetEase, QQ Music, and LRCLIB; YouTube Music lyrics are also tried first when a browse ID is known. |
 
 ---
 
@@ -408,59 +409,66 @@ export async function validateStreamUrl(url, headers = {}, contentLength = null,
 
 ---
 
-## 7. JioSaavn Complete API, OpenSSL 3.0 `des-ede3` 320kbps Decryption & Geo-Block Bypass
+## 7. GDStudio + Kugou Full-Track Search & Streaming, with Deezer Catalog Enrichment
 
-### 7.1 Complete JioSaavn Endpoint Status Table (`jiosaavn.com/api.php`)
+> **Availability note:** No unauthenticated public service can promise a permanently complete catalog or 100% uptime. This resolver uses independent sources and quality fallbacks. Live checks during this session covered English, Bangla, and Hindi examples; availability and rights still vary by track, provider, and region.
 
-Base URL: `https://www.jiosaavn.com/api.php?_format=json&_marker=0&api_version=4&ctx=web6dot0`
+### 7.1 GDStudio / NetEase & Bilibili Search, Full Streams, Lyrics, Covers & Charts
 
-| `__call` Parameter | Extra Query Params | Live Status | Description |
-| :--- | :--- | :--- | :--- |
-| `webapi.getLaunchData` | *(none)* | **WORKING (200 OK)** | Home feed: trending, new releases, top playlists, charts. |
-| `content.getTrending` | `&entity_type=song&entity_language=english,hindi` | **WORKING (200 OK)** | Trending songs, albums, playlists. |
-| `autocomplete.get` | `&cc=in&includeMetaTags=1&query=...` | **WORKING (200 OK)** | Instant search across albums, songs, playlists, artists. |
-| `search.getResults` | `&n=10&p=1&q=...` | **WORKING (Partial Geo-Filter)** | Returns songs with `more_info.encrypted_media_url`. Some Western originals are hidden unless using our Geo-Block Bypass below. |
-| `song.getDetails` | `&cc=in&pids=-RWAZc5D,idoLJICu` | **WORKING (200 OK)** | Returns full song details & `encrypted_media_url` **even for geo-blocked (`disabled: "true"`) Western tracks!** |
-| `content.getAlbumDetails` | `&cc=in&albumid=27758199` | **WORKING (200 OK)** | Full album metadata and song list. |
-| `playlist.getDetails` | `&listid=46545234` | **WORKING (200 OK)** | Returns playlist metadata and comma-separated song PIDs in `more_info.contents`. |
-| `artist.getArtistPageDetails` | `&artistId=597966&n_song=15&n_album=10` | **WORKING (200 OK)** | Artist profile, `dedicated_artist_playlist`, `featured_artist_playlist`. |
-| `social.getTopArtists` | *(none)* | **WORKING (200 OK)** | Top artists list. |
-| `content.getTopShows` | *(none)* | **WORKING (200 OK)** | Podcasts & shows. |
-| `reco.getreco` | `&pid=...` | **EMPTY (`[]`)** | Deprecated; use `xroMusic.upNext()` (`WEB_REMIX`) for song recommendations instead. |
-| `webradio.getSong` | `&stationid=...` | **BROKEN** | Returns `"No new song found for current radio"`; use `xroMusic.upNext()` instead. |
+Verified base endpoint: `https://music-api.gdstudio.xyz/api.php` (the international endpoint tested here).
 
-### 7.2 OpenSSL 3.0 Native 320kbps AAC Decryption (`des-ede3` Key `"38346591"`)
+| Operation | Request shape | Response / purpose |
+| :--- | :--- | :--- |
+| Search | `GET ?types=search&source=netease&name={query}&count=20&pages=1` (or `source=bilibili`) | Track records with `id`, `name`, `artist[]`, `album`, `pic_id`, `url_id`, and `lyric_id`. |
+| Full stream | `GET ?types=url&source={source}&id={url_id}&br={999\|740\|320\|192\|128}` | Direct CDN URL. `999` requests Hi-Res/lossless, `740` lossless, `320` 320kbps MP3, then `192`/`128` fallbacks. Actual availability depends on the track. |
+| Cover | `GET ?types=pic&source={source}&id={pic_id}&size=500` | Cover URL; common sizes include 300, 500, 640, and 1000. |
+| Lyrics | `GET ?types=lyric&source={source}&id={lyric_id}` | Original synced LRC (`lyric`) and translated LRC (`tlyric`) where available. |
+| Playlist/chart | `GET ?types=playlist&source=netease&id={playlistId}` | Playlist metadata and track list; the tested Western/Global chart contains 200 tracks. |
 
-JioSaavn encrypts media URLs with Single DES-ECB using the 8-byte ASCII key `"38346591"`. Because OpenSSL 3.0 (Node.js 18/20/22+) disables legacy `des-ecb` by default, `xroMusic` uses **Triple-DES EDE3 (`des-ede3`) with `K1 = K2 = K3 = "38346591"`** (`24` bytes), which is mathematically identical to Single DES-ECB ($D_K(E_K(D_K(x))) = D_K(x)$) and works in all Node.js versions out of the box:
+`GDStudioMusicResolver` in `music-source-resolvers.js` normalizes those records and performs a quality ladder. For a request of `999`, it tries `999 → 740 → 320 → 192 → 128`; a locked or unavailable tier is skipped. The supported international gateway source IDs configured in this build are `netease` and `bilibili` (other regional GD endpoints were not assumed to work).
+
+Built-in NetEase playlist/chart IDs include Western / Global `2809513713`, Hot `3778678`, Soaring `19723756`, New `3779629`, Classical `71384707`, Electronic `1978921795`, ACG `71385702`, Japanese `5059644681`, and Korean `745956260`.
 
 ```js
-import crypto from "node:crypto";
+import { GDStudioMusicResolver } from "./music-source-resolvers.js";
 
-const JIOSAAVN_3DES_KEY = Buffer.from("38346591".repeat(3), "utf8");
-
-export function decryptJioSaavnMediaUrl(encryptedMediaUrl, targetBitrate = 320) {
-  const decipher = crypto.createDecipheriv("des-ede3", JIOSAAVN_3DES_KEY, null);
-  decipher.setAutoPadding(true);
-  let decrypted = decipher.update(encryptedMediaUrl.trim(), "base64", "utf8");
-  decrypted += decipher.final("utf8");
-  decrypted = decrypted.replace(/^http:\/\//i, "https://");
-
-  return {
-    url320: decrypted.replace(/_(96|160|320)\.mp4/i, "_320.mp4").replace(/_96_p\.mp4/i, "_320_p.mp4"),
-    url160: decrypted.replace(/_(96|160|320)\.mp4/i, "_160.mp4").replace(/_96_p\.mp4/i, "_160_p.mp4"),
-    url96: decrypted.replace(/_(96|160|320)\.mp4/i, "_96.mp4"),
-    preferredUrl: decrypted.replace(/_(96|160|320)\.mp4/i, `_${targetBitrate}.mp4`),
-  };
-}
+const gd = new GDStudioMusicResolver();
+const [track] = await gd.search("Arnob She Je Boshe Ache", { source: "netease" });
+const stream = await gd.stream(track, { quality: "999" }); // downgrades if unavailable
+const lyrics = await gd.lyrics(track);                     // original + translation
+const chart = await gd.chart("2809513713");               // full playlist metadata
 ```
 
-### 7.3 The Artist-Playlist Geo-Block Bypass (`JIOSAAVN_320_BYPASS`)
+### 7.2 Kugou Signed Search, Free-Track Streams & KRC Lyrics
 
-When searching JioSaavn for major Western hits (e.g., `"Maroon 5 Memories"`), `search.getResults` hides the original Interscope track and only returns instrumental covers (`language: "instrumental"`).
-`xroMusic` bypasses this automatically in 3 steps:
-1. Call `autocomplete.get?query=Maroon+5+Memories` $\rightarrow$ extract `playlists.data[0].id` (e.g., `46545234`, `"Let's Play - Maroon 5"`).
-2. Call `playlist.getDetails?listid=46545234` $\rightarrow$ read `more_info.contents` (`"idoLJICu,_oONnN9B,-RWAZc5D,XJ2N9gez,..."`).
-3. Call `song.getDetails?pids=idoLJICu,_oONnN9B,-RWAZc5D,...` $\rightarrow$ match `"Memories"` (`id: "-RWAZc5D"`) and decrypt its `encrypted_media_url` into `https://aac.saavncdn.com/735/9010fdd63976d6a8960c3ab4b422b31c_320.mp4`!
+Kugou contributes a second search index and an independent full-track resolver:
+
+1. **Search:** `GET https://complexsearch.kugou.com/v2/search/song` with WebFilter parameters and `signature = MD5(salt + sortedKeyValuePairs + salt).toUpperCase()`. The web salt used by the tested endpoint is `NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt`.
+2. **Stream:** `GET https://m.kugou.com/app/i/getSongInfo.php?cmd=playInfo&hash={HASH}&from=mkugou`. It can return direct MP3/FLAC CDN streams for eligible free tracks. VIP/locked tracks may return `status: 0`; this implementation does not log in, defeat challenges, or bypass those restrictions.
+3. **Lyrics:** `GET https://krcs.kugou.com/search?ver=1&man=no&client=mobi&keyword={title}&hash=&album_audio_id=0&duration={ms}`, then `/download?ver=1&client=mobi&id={id}&accesskey={accesskey}&fmt=krc&charset=utf8`. KRC is decoded using the provider's 16-byte repeating XOR key and zlib, then returned as timed LRC plus decoded KRC when present.
+4. **Artwork:** The search result's `Image`/`AlbumImage` URL uses `{size}`; replace it with a size such as `480`.
+
+The resolver prefers the requested quality among `ResFileHash` (Hi-Res), `SQFileHash` (FLAC), `HQFileHash` (320kbps), and `FileHash` (standard MP3), while skipping entries marked as privileged. Full playback remains dependent on Kugou's current free-track policy.
+
+### 7.3 Deezer Public Catalog & Match-Gated Provider Fallback
+
+`DeezerCatalogResolver` uses the public `https://api.deezer.com` endpoints:
+
+- `/search?q={query}&limit={n}` for catalog search, track IDs, artist/album metadata, artwork, and ISRC.
+- `/track/{id}`, `/album/{id}`, `/artist/{id}/top`, and `/chart` for catalog detail and charts.
+- Track `preview` is a short preview only. Deezer is **not** treated as a full-song stream source.
+
+When the YouTube Music client waterfall fails and title metadata is available, `UnifiedMusicAPI.resolveCatalogStream()` searches GDStudio and Kugou concurrently, ranks by title/artist/duration, and only resolves a candidate above its match threshold. That prevents blindly streaming the first same-name cover. If both providers fail or match poorly, playback returns an error instead of silently selecting a different song.
+
+```js
+const resolved = await xroMusic.stream(videoId, {
+  title: "Memories",
+  artist: "Maroon 5",
+  durationSeconds: 189,
+  enableCatalogFallback: true,
+  quality: "999", // GDStudio tries Hi-Res/lossless, then lower tiers
+});
+```
 
 ---
 
@@ -478,20 +486,21 @@ When searching JioSaavn for major Western hits (e.g., `"Maroon 5 Memories"`), `s
 
 ---
 
-## 9. 6-Provider Synced Lyrics Waterfall (Word-by-Word TTML, KPOE JSON & LRC)
+## 9. YouTube Music + 7-Provider Synced Lyrics Waterfall (Word-by-Word TTML, KPOE JSON & LRC)
 
-`xroMusic.lyrics({ videoId, lyricsBrowseId, title, artist, album, durationSeconds })` cascades through these 6 providers in order:
+`xroMusic.lyrics({ videoId, lyricsBrowseId, title, artist, album, durationSeconds })` first uses the supplied YouTube Music `lyricsBrowseId` when available, then cascades through these seven external providers:
 
 | Priority | Provider | Endpoint(s) | Format Returned | Live Status |
 | :- | :--- | :--- | :--- | :--- |
 | **1** | **Boidu (Better Lyrics API)** | `GET https://lyrics-api.boidu.dev/getLyrics?s={title}&a={artist}&al={album}&d={durationSeconds}` | Apple Music **word-by-word TTML** (`{ ttml: "<tt itunes:timing=\"Word\">..." }`) parsed into `{ startMs, endMs, text, words: [{ text, startMs, endMs }] }`. | **WORKING (200 OK)** |
 | **2** | **LyricsPlus (YouLyPlus)** | `GET https://lyricsplus.binimum.org/v2/lyrics/get?title={title}&artist={artist}&album={album}&duration={durationSeconds}` | Word/syllable-timed JSON (`{ type, lyrics: [...] }`). | **WORKING (200 OK)** |
-| **3** | **YouTube Music (`IOS_MUSIC`)** | `POST https://music.youtube.com/youtubei/v1/browse` (`browseId: "MPLYt_..."`, client `IOS_MUSIC`) | `timedLyricsData` (line-synced timestamps). | **WORKING (200 OK)** |
-| **4** | **Kugou** | 1. `GET https://songsearch.kugou.com/song_search_v2?keyword={kw}&page=1&pagesize=5` $\rightarrow$ `data.lists[0].FileHash`<br>2. `GET https://krcs.kugou.com/search?ver=1&man=yes&client=mobi&hash={FileHash}` $\rightarrow$ `candidates[0].{id, accesskey}`<br>3. `GET https://lyrics.kugou.com/download?ver=1&client=pc&id={id}&accesskey={accesskey}&fmt=lrc` | Base64-encoded synced `.lrc` in `content` (`Buffer.from(content, "base64").toString("utf8")`). | **WORKING (200 OK)** |
+| **3** | **GDStudio / NetEase** | `GET https://music-api.gdstudio.xyz/api.php?types=search&source=netease&name={title+artist}` then `types=lyric&id={lyric_id}` | Synced original LRC (`lyric`) and translated LRC (`tlyric`) where available. | **Verified during this session** |
+| **4** | **Kugou KRC** | `GET https://krcs.kugou.com/search?ver=1&man=no&client=mobi&keyword={title}&hash=&album_audio_id=0&duration={ms}` then `/download?ver=1&client=mobi&id={id}&accesskey={accesskey}&fmt=krc&charset=utf8` | KRC decoded via repeating XOR + zlib; returns word-timed KRC and line-timed LRC. Match is gated by title and duration. | **Verified during this session** |
 | **5** | **NetEase Cloud Music** | 1. `GET https://music.163.com/api/search/get/web?s={kw}&type=1&offset=0&total=true&limit=5` (`Referer: https://music.163.com/`) $\rightarrow$ `result.songs[0].id`<br>2. `GET https://music.163.com/api/song/lyric?id={songId}&lv=1&tv=1` | Synced LRC (`lrc.lyric`) + translated LRC (`tlyric.lyric`). | **WORKING (200 OK)** |
 | **6** | **QQ Music** | 1. `GET https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg?format=json&key={kw}` (`Referer: https://y.qq.com/`) $\rightarrow$ `data.song.itemlist[0].mid`<br>2. `GET https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid={mid}&format=json&nobase64=1` | Synced LRC (`lyric`) + translation (`trans`). Must include `Referer: https://y.qq.com/`. | **WORKING (200 OK)** |
+| **7** | **LRCLIB** | `GET https://lrclib.net/api/get?track_name={title}&artist_name={artist}&album_name={album}&duration={durationSeconds}` | Synced LRC (`syncedLyrics`) or plain lyrics (`plainLyrics`). | Fallback provider |
 
-*(Note: `lrclib.net/api/get` is included as fallback #7 when online, and `api-lyrics.simpmusic.org` is excluded by default due to Cloudflare 403 blocking).*
+*(The external waterfall continues when a provider is unavailable or returns no matching lyrics.)*
 
 ---
 
@@ -508,7 +517,7 @@ When searching JioSaavn for major Western hits (e.g., `"Maroon 5 Memories"`), `s
 
 ---
 
-## 11. Complete `xroMusic` Client API Reference (`xroMusic.*` — All 35 Operations)
+## 11. Complete `xroMusic` Client API Reference (`xroMusic.*` — 40 Tested Operations)
 
 Import the singleton client or instantiate a custom instance:
 ```js
@@ -519,7 +528,7 @@ import xroMusic, { XroMusicClient } from "./youtube-music-js/xroMusic.js";
 | :--- | :--- | :--- |
 | **1. Init & Auth** | `await xroMusic.init({ hl, gl, cookie, startProxy, proxyPort })` | Initializes `visitorData`, `poToken`, `node:vm` cipher engine, and optional loopback proxy. |
 | | `xroMusic.setAuth({ cookie, visitorData, poToken, listenBrainzToken, lastFmApiKey })` | Configures optional cookies (for private uploads/18+ tracks) & scrobble tokens. |
-| **2. Discovery** | `await xroMusic.search(query, { type, source, limit, continuation })` | Searches `ytmusic`, `saavn`, `archive`, or `all` with filter `type` (`songs`, `videos`, `albums`, `artists`, `playlists`, `podcasts`). |
+| **2. Discovery** | `await xroMusic.search(query, { type, source, limit, continuation, gdSource })` | Searches `ytmusic`, `gdstudio`, `kugou`, `deezer`, `archive`, or `all`; `gdSource` selects `netease` or `bilibili`. Deezer results are catalog/preview metadata. |
 | | `await xroMusic.suggestions(input)` | Real-time autocomplete suggestions from `music/get_search_suggestions`. |
 | | `await xroMusic.home(continuation?)` | Fetches YouTube Music Home shelves (`FEmusic_home`). |
 | | `await xroMusic.charts(countryCode = "US")` | Fetches Top 100 Songs, Videos, Artists & Trending (`FEmusic_charts`). |
@@ -531,33 +540,35 @@ import xroMusic, { XroMusicClient } from "./youtube-music-js/xroMusic.js";
 | | `await xroMusic.playlist(playlistId, continuation?)` | Fetches Playlist tracks (`VL...`) and paginates with `continuation`. |
 | | `await xroMusic.upNext(videoId, { playlistId, radio, continuation })` | Fetches Up-Next radio queue (`RDAMVM...`), `lyricsBrowseId`, and `relatedBrowseId`. |
 | | `await xroMusic.related(relatedBrowseId)` | Fetches Related tracks and recommendations (`MPTRt_...`). |
-| **4. Streaming** | `await xroMusic.stream(videoId, { preferHigh, validate, isUpload, enableJioSaavnFallback, title, artist })` | Multi-client stream resolver (`WEB_REMIX` $\rightarrow$ `VISIONOS` $\rightarrow$ `TVHTML5_SIMPLY` $\rightarrow$ `IOS` $\rightarrow$ `ANDROID_VR` $\rightarrow$ `JIOSAAVN_320_BYPASS`) with `node:vm` cipher, tail-range validation, and proxy wrapping. |
+| **4. Streaming** | `await xroMusic.stream(videoId, { preferHigh, validate, isUpload, enableCatalogFallback, title, artist, durationSeconds, quality })` | YouTube Music client waterfall first; on failure, match-gated GDStudio/Kugou full-track fallback. Uses ciphering, tail-range validation, and proxy wrapping for YouTube streams. |
 | | `await xroMusic.videoStream(videoId, { maxHeight = 1080 })` | Resolves matching 1080p/720p video stream for Audio $\leftrightarrow$ Video toggle. |
 | | `xroMusic.decipher({ url, signatureCipher, s, n, poToken })` | Directly deciphers `s` and transforms `n` using `UniversalCipherEngine`. |
 | | `await xroMusic.validateStream(url, { headers, contentLength })` | Probes the last 256 bytes of a stream URL to verify it is not 1 MiB-capped. |
 | | `await xroMusic.proxyStart(port?)` | Starts the loopback 4 MiB bounded-range HTTP proxy. |
 | | `xroMusic.proxyWrap(streamUrl, { headers, contentLength, mimeType })` | Registers a stream URL with the loopback proxy and returns the local proxy URL. |
 | | `await xroMusic.proxyStop()` | Stops the loopback HTTP proxy. |
-| **5. JioSaavn** | `await xroMusic.saavnSearch(query, { limit })` | Searches JioSaavn and decrypts all `320kbps`, `160kbps`, and `96kbps` AAC URLs. |
-| | `await xroMusic.saavnStream(queryOrEncryptedUrl)` | Resolves a 320kbps AAC stream (with Geo-Block Bypass) or decrypts an `encrypted_media_url`. |
-| | `await xroMusic.saavnLaunchData()` | Fetches JioSaavn home launch data. |
-| | `await xroMusic.saavnTrending({ type, language })` | Fetches JioSaavn trending songs/albums/playlists. |
-| | `await xroMusic.saavnTopArtists()` | Fetches JioSaavn top artists. |
-| | `await xroMusic.saavnSongDetails(pids)` | Fetches song details by PID(s) and attaches decrypted `.streams`. |
-| | `await xroMusic.saavnAlbum(albumId)` | Fetches JioSaavn album details. |
-| | `await xroMusic.saavnPlaylist(listId)` | Fetches JioSaavn playlist details and song PIDs. |
-| | `await xroMusic.saavnArtist(artistId, { songCount, albumCount })` | Fetches JioSaavn artist page details and dedicated playlists. |
-| **6. Archive** | `await xroMusic.archiveSearch(query, { limit })` | Searches Internet Archive (`archive.org`) audio items. |
+| **5. GDStudio** | `await xroMusic.gdStudioSearch(query, { source, limit, page })` | Searches the verified NetEase/Bilibili catalogs. |
+| | `await xroMusic.gdStudioSearchAll(query, { sources, limit })` | Searches both configured GDStudio sources and deduplicates results. |
+| | `await xroMusic.gdStudioStream(track, { quality: "999" })` | Resolves a full stream with quality fallback from Hi-Res/lossless to MP3. |
+| | `await xroMusic.gdStudioCover(track, { size: 500 })` | Resolves cover artwork. |
+| | `await xroMusic.gdStudioLyrics(track)` | Fetches synced original and translated LRC when present. |
+| | `await xroMusic.gdStudioPlaylist(id)` / `gdStudioChart(id)` / `gdStudioCharts()` | Fetches playlists/charts and lists known chart IDs. |
+| **6. Kugou** | `await xroMusic.kugouSearch(query, { limit })` | Signed WebFilter catalog search with available quality hashes. |
+| | `await xroMusic.kugouStream(track, { quality: "320" })` | Resolves a full stream for an eligible free track; locked/VIP tracks are not bypassed. |
+| | `await xroMusic.kugouLyrics(track)` | Resolves KRC and/or timed LRC lyrics with title/duration matching. |
+| **7. Deezer Catalog** | `await xroMusic.deezerSearch(query, { limit })` / `deezerTrack(id)` | Public metadata, ISRC, artwork, and short preview. Does not provide a full-song stream. |
+| | `await xroMusic.deezerAlbum(id)` / `deezerArtistTop(id)` / `deezerCharts()` | Album, artist-top-track, and chart catalog metadata. |
+| **8. Archive** | `await xroMusic.archiveSearch(query, { limit })` | Searches Internet Archive (`archive.org`) audio items. |
 | | `await xroMusic.archiveStream(identifier)` | Resolves direct MP3/FLAC download URL from `archive.org/metadata/{id}/files`. |
-| **7. Lyrics** | `await xroMusic.lyrics({ videoId, lyricsBrowseId, title, artist, album, durationSeconds })` | 6-provider synced lyrics waterfall (Boidu word-TTML $\rightarrow$ LyricsPlus $\rightarrow$ `IOS_MUSIC` $\rightarrow$ Kugou $\rightarrow$ NetEase $\rightarrow$ QQ Music). |
-| **8. Queue/Lib** | `xroMusic.queue.{get, set, add, next, prev, clear}` | Stateful playback queue manager with `playNext`, `shuffle`, and `repeatMode`. |
+| **9. Lyrics** | `await xroMusic.lyrics({ videoId, lyricsBrowseId, title, artist, album, durationSeconds })` | YouTube Music lyrics first when a browse ID is available, followed by seven external fallbacks: Boidu, LyricsPlus, GDStudio, Kugou KRC, NetEase, QQ Music, and LRCLIB. |
+| **10. Queue/Lib** | `xroMusic.queue.{get, set, add, next, prev, clear}` | Stateful playback queue manager with `playNext`, `shuffle`, and `repeatMode`. |
 | | `xroMusic.library.{like, unlike, getLiked, createPlaylist, exportBackup}` | Local multi-source library & JSON backup manager. |
 | | `await xroMusic.spotifyImport(spotifyUrlOrId, { type })` | Keyless Spotify track/playlist/album metadata importer via `open.spotify.com/embed`. |
 | | `await xroMusic.scrobble({ title, artist, album, durationSeconds, type })` | Submits `"playing_now"` or `"single"` listen events to ListenBrainz. |
 
 ---
 
-## 12. Live Case Study: Maroon 5 — "Memories" Complete Multi-Source Payload
+## 12. Live Case Study: Maroon 5 — "Memories" Multi-Source Catalog Record
 
 ```json
 {
@@ -565,34 +576,28 @@ import xroMusic, { XroMusicClient } from "./youtube-music-js/xroMusic.js";
     "title": "Memories",
     "artist": "Maroon 5",
     "album": "JORDI (Deluxe)",
-    "durationSeconds": 189,
-    "releaseDate": "2021-06-11",
-    "label": "℗ 2019 Interscope Records"
+    "durationSeconds": 189
   },
-  "ids": {
+  "catalog": {
     "youtubeVideoId": "SlPhMPnQ58k",
-    "youtubeAutoRadioPlaylistId": "RDAMVMSlPhMPnQ58k",
-    "jiosaavnPid": "-RWAZc5D",
-    "jiosaavnArtistId": "597966",
-    "jiosaavnPlaylistId": "46545234",
-    "spotifyTrackId": "2b8fOow8UzyDFAE27YhOZM",
-    "kugouFileHash": "5D3138AD81E3E1E630173FD9A240FB6B",
-    "kugouLyricId": "163181993",
-    "kugouAccessKey": "1D2780FC5368C3314C08C5D626AD3523",
-    "internetArchiveId": "story-wa-memories-maroon-5-dj-desa-remix"
+    "gdStudioNeteaseId": "1852069909",
+    "deezerTrackId": "1400843202",
+    "isrc": "USUM71913350",
+    "kugouFileHash": "0A29189802CC315517CCF49430B3D157",
+    "kugouHQFileHash320": "61E8CF49C7720284ADD94249C3CC3930",
+    "kugouSQFileHashFlac": "60BFE76542516A1BBBC9E9959B897330",
+    "kugouResFileHashHiRes": "F660D86E2AAE37D544C9740D7DA9AB06"
   },
-  "streams": {
-    "jiosaavnOriginal320": "https://aac.saavncdn.com/735/9010fdd63976d6a8960c3ab4b422b31c_320.mp4",
-    "jiosaavnOriginal160": "https://aac.saavncdn.com/735/9010fdd63976d6a8960c3ab4b422b31c_160.mp4",
-    "jiosaavnOriginal96": "https://aac.saavncdn.com/735/9010fdd63976d6a8960c3ab4b422b31c_96.mp4",
-    "jiosaavnPreviewMp4": "https://preview.saavncdn.com/735/iFqvtuYbz83vZ8M7MxyXvGfN9KPlJWaWFgBcGKDEr7eZu_96_p.mp4",
-    "jioTuneMp3": "https://jiotunepreview.jio.com/content/Converted/010912291108382.mp3",
-    "jiosaavnAmbient320": "https://aac.saavncdn.com/732/9c16b92c99c5144e7cb9c8f6714f7f20_320.mp4",
-    "jiosaavnKaraoke320": "https://aac.saavncdn.com/512/3563ef6f243ff75901ab52191c270117_320.mp4",
-    "internetArchiveRemixMp3": "https://archive.org/download/story-wa-memories-maroon-5-dj-desa-remix/STORY%20WA%20%21%20MEMORIES%20-%20MAROON%205%20%28%20DJ%20DESA%20Remix%20%29.mp3"
+  "playbackPolicy": {
+    "primary": "YouTube Music InnerTube multi-client waterfall",
+    "fullTrackFallbacks": ["GDStudio NetEase/Bilibili", "Kugou eligible free tracks"],
+    "catalogOnly": "Deezer metadata/ISRC/artwork and short preview",
+    "matching": "title + artist + duration gate before external playback"
   }
 }
 ```
+
+The GDStudio tests in this session separately confirmed full-track 320kbps MP3 and FLAC responses for English, Bangla, and Hindi examples. Provider rights, tier availability, and direct URL lifetime remain provider-controlled; the client retries lower quality or another matched provider instead of claiming a universal guarantee.
 
 ---
 
@@ -618,7 +623,7 @@ Mount `xroMusic` behind a lightweight Express or Node `http` server bound to `0.
 ### Step 2: Frontend Player Integration (React / Svelte / Vue)
 1. **Audio Element (`<audio>`)**:
    - When playing a track, call `/api/stream/:videoId?title=...&artist=...`.
-   - If `client.startsWith("JIOSAAVN")` or `client === "INTERNET_ARCHIVE"`, set `<audio src={res.streamUrl} />` directly (CDN supports CORS and unthrottled byte ranges).
+   - For a direct GDStudio/Kugou/Archive URL, use the backend-provided stream URL (or proxy it through your own same-origin endpoint when the browser requires it). Deezer's preview URL is not a full track.
    - If `client` is a YouTube client (`WEB_REMIX`, `VISIONOS`, `TVHTML5_SIMPLY`, `IOS`, `ANDROID_VR`), set `<audio src={res.proxyUrl} />` (relative `/api/audio-proxy/:id`) so all byte-range requests go through the 4 MiB bounded-range proxy.
 2. **Pre-buffering & Gapless Queue**:
    - When playback reaches 80% of the current track's duration, call `/api/stream/:nextVideoId` in the background so `StreamFetchManager` caches the resolved URL before the track transition.

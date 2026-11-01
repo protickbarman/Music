@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,8 +9,11 @@ import {
   UniversalCipherEngine,
   BoundedRangeAudioProxy,
   derivePlayerConfigFromJs,
-  decryptJioSaavnMediaUrl,
   extractVisitorDataFromSwJsData,
+  GDStudioMusicResolver,
+  KugouMusicResolver,
+  DeezerCatalogResolver,
+  signKugouWebParams,
   generateColdStartPoToken,
   validateStreamUrl,
 } from "./unified-music-api.js";
@@ -76,15 +80,118 @@ async function runTests() {
   assert.ok(visitorData && /^Cg[ts]/.test(visitorData), "visitorData must start with Cgt/Cgs");
   assert.ok(poToken && poToken.length > 16, "poToken must be non-empty base64url");
 
-  console.log("\n=== 3. Testing JioSaavn DES-ECB (38346591) 320kbps AAC Decryption ===");
-  const encryptedSample =
-    "ID2ieOjCrwfgWvL5sXl4B1ImC5QfbsDySan+n+AW12BvOaQj7cuGfg8Ed085rYUtqDj8DQY3nIMQdr42ScGdtRw7tS9a8Gtq";
-  const saavnUrls = decryptJioSaavnMediaUrl(encryptedSample, 320);
-  console.log("  Decrypted JioSaavn URLs:", saavnUrls);
-  assert.equal(
-    saavnUrls.url320,
-    "https://aac.saavncdn.com/450/f467e05e2825cec2203546333e0d0550_320.mp4"
+  console.log("\n=== 3. Testing GDStudio, Kugou, and Deezer music resolvers ===");
+  const gdTrack = {
+    id: "451703096",
+    name: "Shape of You",
+    artist: ["Ed Sheeran"],
+    album: "÷ (Deluxe)",
+    duration: 233,
+    pic_id: "109951171770750671",
+    url_id: "451703096",
+    lyric_id: "451703096",
+  };
+  const gdNeteaseAlternative = { ...gdTrack, id: "netease-alt", name: "Shape of You (Live)", url_id: "netease-alt" };
+  const gdBilibiliTrack = { ...gdTrack, id: "bili-alt", name: "Shape of You - Cover", url_id: "bili-alt" };
+  const kugouTrack = {
+    SongName: "Shape of You",
+    SingerName: "Ed Sheeran",
+    AlbumName: "÷ (Deluxe)",
+    Duration: 233,
+    FileHash: "0123456789ABCDEF0123456789ABCDEF",
+    HQFileHash: "1123456789ABCDEF0123456789ABCDEF",
+    SQFileHash: "2123456789ABCDEF0123456789ABCDEF",
+    ResFileHash: "3123456789ABCDEF0123456789ABCDEF",
+    Privilege: 0,
+    HQPrivilege: 0,
+    SQPrivilege: 0,
+    ResPrivilege: 0,
+    Image: "https://imge.kugou.com/stdmusic/{size}/cover.jpg",
+  };
+  const deezerTrack = {
+    id: 1400843202,
+    title: "Shape of You",
+    duration: 233,
+    isrc: "GBAHS1600463",
+    preview: "https://cdn.example.test/shape-preview.mp3",
+    artist: { name: "Ed Sheeran" },
+    album: { title: "÷ (Deluxe)", cover_xl: "https://cdn.example.test/shape-cover.jpg" },
+  };
+  const gdQualityRequests = [];
+  const providerFetch = async (url) => {
+    const parsed = new URL(String(url));
+    if (parsed.hostname === "music-api.gdstudio.xyz") {
+      const params = parsed.searchParams;
+      const type = params.get("types");
+      if (type === "search") {
+        const tracks = params.get("source") === "bilibili"
+          ? [gdBilibiliTrack, gdTrack]
+          : [gdTrack, gdNeteaseAlternative];
+        return new Response(JSON.stringify(tracks), { status: 200 });
+      }
+      if (type === "url") {
+        const br = params.get("br");
+        gdQualityRequests.push(br);
+        if (br === "999") return new Response(JSON.stringify({ url: "err", br: -1 }), { status: 200 });
+        return new Response(JSON.stringify({ url: "https://cdn.example.test/shape-lossless.flac", br: 740, size: 27464927 }), { status: 200 });
+      }
+      if (type === "pic") return new Response(JSON.stringify({ url: "https://cdn.example.test/shape-cover.jpg" }), { status: 200 });
+      if (type === "lyric") return new Response(JSON.stringify({ lyric: "[00:12.34]Hello\n", tlyric: "[00:12.34]你好\n" }), { status: 200 });
+      if (type === "playlist") return new Response(JSON.stringify({ playlist: { id: params.get("id"), name: "Global Hits", tracks: [gdTrack] } }), { status: 200 });
+    }
+    if (parsed.hostname === "complexsearch.kugou.com") {
+      return new Response(JSON.stringify({ error_code: 0, data: { lists: [kugouTrack] } }), { status: 200 });
+    }
+    if (parsed.hostname === "m.kugou.com") {
+      return new Response(JSON.stringify({ status: 1, url: "https://cdn.example.test/kugou-320.mp3", extName: "mp3", bitRate: 320, fileSize: 9000 }), { status: 200 });
+    }
+    if (parsed.hostname === "api.deezer.com") {
+      if (parsed.pathname === "/search") return new Response(JSON.stringify({ data: [deezerTrack] }), { status: 200 });
+      return new Response(JSON.stringify(deezerTrack), { status: 200 });
+    }
+    return new Response(null, { status: 404 });
+  };
+
+  const gdResolver = new GDStudioMusicResolver({ fetchImpl: providerFetch });
+  const gdResults = await gdResolver.search("Shape of You", { source: "netease" });
+  assert.equal(gdResults[0].title, "Shape of You");
+  assert.equal(gdResults[0].streamId, "451703096");
+  const crossSourceResults = await gdResolver.searchAcrossSources("Shape of You", { limit: 10 });
+  assert.deepEqual(
+    crossSourceResults.map((track) => track.source),
+    ["netease", "bilibili", "netease"],
+    "GDStudio source lists should interleave before deduplication and limiting"
   );
+  const gdStream = await gdResolver.stream(gdResults[0], { quality: "999" });
+  assert.equal(gdStream.quality, "lossless");
+  assert.equal(gdStream.mimeType, "audio/flac");
+  assert.deepEqual(gdQualityRequests, ["999", "740"]);
+  assert.equal(await gdResolver.cover(gdResults[0]), "https://cdn.example.test/shape-cover.jpg");
+  assert.ok((await gdResolver.lyrics(gdResults[0])).tlyric.includes("你好"));
+  assert.equal((await gdResolver.playlist("2809513713")).tracks.length, 1);
+  console.log("  GDStudio:", { title: gdResults[0].title, fallbackQuality: gdStream.quality, attemptedBr: gdQualityRequests });
+
+  const signedParams = { keyword: "Shape of You", page: 1 };
+  const expectedKugouSignature = crypto
+    .createHash("md5")
+    .update("NVPh5oo715z5DIWAeQlhMDsWXXQV4hwtkeyword=Shape of Youpage=1NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt")
+    .digest("hex")
+    .toUpperCase();
+  assert.equal(signKugouWebParams(signedParams), expectedKugouSignature);
+  const kugouResolver = new KugouMusicResolver({ fetchImpl: providerFetch, mid: "test-mid", clock: () => 1700000000000 });
+  const kugouResults = await kugouResolver.search("Shape of You Ed Sheeran");
+  const kugouStream = await kugouResolver.stream(kugouResults[0], { quality: "320" });
+  assert.equal(kugouStream.client, "KUGOU_MOBILE");
+  assert.equal(kugouStream.bitrate, 320000);
+  assert.ok(kugouResults[0].coverUrl.endsWith("/480/cover.jpg"));
+  console.log("  Kugou:", { title: kugouResults[0].title, stream: kugouStream.streamUrl, signature: expectedKugouSignature });
+
+  const deezerResolver = new DeezerCatalogResolver({ fetchImpl: providerFetch });
+  const deezerResults = await deezerResolver.search("Shape of You");
+  assert.equal(deezerResults[0].isrc, "GBAHS1600463");
+  assert.equal(deezerResults[0].fullStreamAvailable, false);
+  await assert.rejects(deezerResolver.stream(), /short previews, not full-song streams/);
+  console.log("  Deezer catalog:", { title: deezerResults[0].title, isrc: deezerResults[0].isrc, fullStreamAvailable: deezerResults[0].fullStreamAvailable });
 
   console.log("\n=== 4. Testing Tail-Range Stream Validator (1 MiB Cap Detection) ===");
   // Simulate an ANDROID_VR URL that passes opening range (0-1024) but 403s past 1 MiB (tail range)
@@ -209,6 +316,123 @@ async function runTests() {
   assert.equal(upstreamRangeCalls.length, 4, "64 KiB stream must be fetched in four 16 KiB bounded chunks");
 
   await api.audioProxy.stop();
+
+  console.log("\n=== 6. Testing match-gated external full-stream fallback ===");
+  const fallbackFetch = async (url, init = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname.endsWith("/youtubei/v1/player")) {
+      const body = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        playabilityStatus: { status: "UNPLAYABLE", reason: "Unavailable in this test" },
+        videoDetails: { title: "Test Track", author: "Test Artist - Topic", lengthSeconds: "210" },
+      }), { status: 200 });
+    }
+    if (parsed.hostname === "music-api.gdstudio.xyz") {
+      const params = parsed.searchParams;
+      if (params.get("types") === "search") {
+        return new Response(JSON.stringify(params.get("source") === "netease" ? [{
+          id: "gd-test-1",
+          name: "Test Track",
+          artist: ["Test Artist"],
+          duration: 210,
+          url_id: "gd-test-1",
+        }] : []), { status: 200 });
+      }
+      if (params.get("types") === "url") {
+        return new Response(JSON.stringify({ url: "https://cdn.example.test/test-track.flac", br: 999, size: 12000000 }), { status: 200 });
+      }
+    }
+    if (parsed.hostname === "complexsearch.kugou.com") {
+      return new Response(JSON.stringify({ error_code: 0, data: { lists: [] } }), { status: 200 });
+    }
+    return new Response(null, { status: 404 });
+  };
+  const fallbackApi = new UnifiedMusicAPI({ fetchImpl: fallbackFetch });
+  const externalStream = await fallbackApi.resolveYouTubeStream("video-unavailable", {
+    title: "Test Track",
+    artist: "Test Artist",
+    durationSeconds: 210,
+    validate: false,
+  });
+  assert.equal(externalStream.fallbackSource, "gdstudio");
+  assert.equal(externalStream.client, "GDSTUDIO");
+  assert.ok(externalStream.streamUrl.endsWith("test-track.flac"));
+  assert.ok(externalStream.matchScore >= 0.9);
+  console.log("  Fallback result:", { provider: externalStream.fallbackSource, quality: externalStream.quality, matchScore: externalStream.matchScore });
+
+  // If YouTube's URL fails the tail-range check, prefer a matched full-track catalog URL.
+  const cappedCandidateFetch = async (url, init = {}) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname.endsWith("/youtubei/v1/player")) {
+      const body = JSON.parse(init.body);
+      if (body.videoId === "video-capped") {
+        return new Response(JSON.stringify({
+          playabilityStatus: { status: "OK" },
+          videoDetails: { title: "Test Track", author: "Test Artist - Topic", lengthSeconds: "210" },
+          streamingData: { adaptiveFormats: [{
+            itag: 251,
+            mimeType: 'audio/webm; codecs="opus"',
+            bitrate: 160000,
+            audioQuality: "AUDIO_QUALITY_MEDIUM",
+            contentLength: "2100000",
+            url: "https://rr1---sn-mock.googlevideo.com/videoplayback?expire=1900000000&itag=251",
+          }] },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        playabilityStatus: { status: "UNPLAYABLE", reason: "Unavailable in this test" },
+        videoDetails: { title: "Test Track", author: "Test Artist - Topic", lengthSeconds: "210" },
+      }), { status: 200 });
+    }
+    if (parsed.hostname.endsWith("googlevideo.com")) return new Response(null, { status: 403 });
+    if (parsed.hostname === "music-api.gdstudio.xyz") {
+      const params = parsed.searchParams;
+      if (params.get("types") === "search") {
+        return new Response(JSON.stringify(params.get("source") === "netease" ? [{
+          id: "gd-test-1", name: "Test Track", artist: ["Test Artist"], duration: 210, url_id: "gd-test-1",
+        }] : []), { status: 200 });
+      }
+      if (params.get("types") === "url") {
+        return new Response(JSON.stringify({ url: "https://cdn.example.test/test-track.flac", br: 999, size: 12000000 }), { status: 200 });
+      }
+    }
+    if (parsed.hostname === "complexsearch.kugou.com") {
+      return new Response(JSON.stringify({ error_code: 0, data: { lists: [] } }), { status: 200 });
+    }
+    return new Response(null, { status: 404 });
+  };
+  const cappedCandidateApi = new UnifiedMusicAPI({ fetchImpl: cappedCandidateFetch });
+  const cappedFallback = await cappedCandidateApi.resolveYouTubeStream("video-capped");
+  assert.equal(cappedFallback.fallbackSource, "gdstudio");
+  assert.equal(cappedFallback.validated, null);
+  assert.ok(cappedFallback.streamUrl.endsWith("test-track.flac"));
+
+  // An exact-title result from an unrelated artist must not be streamed as a fallback.
+  const mismatchFetch = async (url) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname.endsWith("/youtubei/v1/player")) {
+      return new Response(JSON.stringify({
+        playabilityStatus: { status: "UNPLAYABLE" },
+        videoDetails: { title: "Test Track", author: "Test Artist - Topic", lengthSeconds: "210" },
+      }), { status: 200 });
+    }
+    if (parsed.hostname === "music-api.gdstudio.xyz" && parsed.searchParams.get("types") === "search") {
+      return new Response(JSON.stringify(parsed.searchParams.get("source") === "netease" ? [{
+        id: "wrong-artist", name: "Test Track", artist: ["Wrong Artist"], duration: 210, url_id: "wrong-artist",
+      }] : []), { status: 200 });
+    }
+    if (parsed.hostname === "complexsearch.kugou.com") {
+      return new Response(JSON.stringify({ error_code: 0, data: { lists: [] } }), { status: 200 });
+    }
+    return new Response(null, { status: 404 });
+  };
+  const mismatchApi = new UnifiedMusicAPI({ fetchImpl: mismatchFetch });
+  await assert.rejects(
+    mismatchApi.resolveYouTubeStream("video-mismatch"),
+    /All playback clients and catalog fallbacks exhausted/
+  );
+
+  console.log("  Fallback checks: matched catalog stream preferred over a capped URL; unrelated artist rejected.");
   console.log("\nALL UNIFIED MUSIC API TESTS PASSED!");
 }
 

@@ -1,0 +1,11 @@
+# Downloaded upstream repositories and full app bundles are retained locally for reference,
+# but only the runtime/test fixtures named in youtube-music-js/README.md are committed.
+/youtube-music-js/faraday-cipher-ts/
+/youtube-music-js/limusic-js-ts/
+/youtube-music-js/live-ytm-scripts/
+/youtube-music-js/npm-packages/
+/youtube-music-js/reserver-ytb-js/
+/youtube-music-js/standalone-api-js/
+/youtube-music-js/youtube-player-scripts/
+/youtube-music-js/ytm-api-repos/
+/youtube-music-js/cipher-configs/

@@ -32,18 +32,17 @@
  *      with a 20-second stall timeout and automatic support for both `*.googlevideo.com`
  *      and `*.c.youtube.com` (user uploads).
  *
- * 4. Cross-Provider Audio & Catalog Bridge (`Tuneify` + `WhiteHole` + `Music-Aura` + `Mornye`):
- *    - JioSaavn (`jiosaavn.com/api.php`) search, song/album/playlist details, and pure Node.js
- *      `crypto` DES-ECB (`key: "38346591"`) decryption of `encrypted_media_url` into 320kbps AAC (`.mp4`).
- *    - Smart Cross-Provider Matcher (`Title + Artist + Duration / ISRC`) that can resolve
- *      any track via YouTube Music OR JioSaavn 320kbps AAC OR Internet Archive (`archive.org`).
+ * 4. Multi-Source Catalog & Full-Track Resolver:
+ *    - GDStudio international API (verified NetEase/Bilibili search, 128–320kbps MP3,
+ *      lossless/Hi-Res FLAC, artwork, synced lyrics, playlists, and charts).
+ *    - Kugou Web-salt search + keyless free-track stream resolver + KRC/LRC lyrics.
+ *    - Deezer public catalog/ISRC/artwork/charts (preview only; not a full-stream source).
+ *    - Match-gated fallback from YouTube Music to GDStudio/Kugou; locked tracks are not bypassed.
  *
  * 5. Multi-Provider Synced Lyrics Waterfall (`limusic` `lyrics.ts`):
  *    - YouTube Music (`IOS_MUSIC` timed lyrics / `WEB_REMIX` plain lyrics)
- *    - LyricsPlus / Boidu (`lyrics-api.boidu.dev`, `lyricsplus.binimum.org`)
- *    - Kugou (`msearchcdn.kugou.com` + `krcs.kugou.com` base64 LRC)
- *    - NetEase Cloud Music (`music.163.com/api/song/lyric`)
- *    - QQ Music (`c.y.qq.com` with `Referer: https://y.qq.com/`)
+ *    - Boidu, LyricsPlus, GDStudio, Kugou KRC, NetEase, QQ Music, and LRCLIB
+ *    - Kugou KRC is decoded to timed LRC; GDStudio exposes original + translated LRC
  */
 
 import crypto from "node:crypto";
@@ -52,6 +51,22 @@ import http from "node:http";
 import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import {
+  DeezerCatalogResolver,
+  GDStudioMusicResolver,
+  KugouMusicResolver,
+  GDSTUDIO_SOURCE_IDS,
+  scoreTrackMatch,
+} from "./music-source-resolvers.js";
+
+export {
+  DeezerCatalogResolver,
+  GDStudioMusicResolver,
+  KugouMusicResolver,
+  GDSTUDIO_CHARTS,
+  GDSTUDIO_SOURCE_IDS,
+  signKugouWebParams,
+} from "./music-source-resolvers.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -728,34 +743,8 @@ export function generateColdStartPoToken(visitorData = "Cgt4VkFERzVCUHZBRSiYl8fA
 }
 
 // ============================================================================
-// 4. JIOSAAVN 320KBPS DES-ECB DECRYPTION & API (`Tuneify` + `WhiteHole` + `Mornye`)
+// 4. MULTI-SOURCE MUSIC CATALOG & FULL-TRACK RESOLVERS
 // ============================================================================
-
-// Triple-DES EDE3 with K1 = K2 = K3 = "38346591" is mathematically identical to Single DES-ECB
-// (`D_K(E_K(D_K(x))) = D_K(x)`) and works natively in OpenSSL 3.0 / Node 18-22+ without
-// requiring `--openssl-legacy-provider` or external `node-forge` / `crypto-js` packages!
-const JIOSAAVN_3DES_KEY = Buffer.from("38346591".repeat(3), "utf8");
-
-/**
- * Decrypts JioSaavn `encrypted_media_url` (Base64 DES-ECB with key `"38346591"`)
- * and upgrades bitrate to `_320.mp4` (320kbps AAC), `_160.mp4`, or `_96.mp4`.
- */
-export function decryptJioSaavnMediaUrl(encryptedMediaUrl, targetBitrate = 320) {
-  if (!encryptedMediaUrl || typeof encryptedMediaUrl !== "string") return null;
-  const decipher = crypto.createDecipheriv("des-ede3", JIOSAAVN_3DES_KEY, null);
-  decipher.setAutoPadding(true);
-  let decrypted = decipher.update(encryptedMediaUrl.trim(), "base64", "utf8");
-  decrypted += decipher.final("utf8");
-  decrypted = decrypted.replace(/^http:\/\//i, "https://");
-
-  const suffix = `_${targetBitrate}.mp4`;
-  return {
-    url320: decrypted.replace(/_(96|160|320)\.mp4/i, "_320.mp4").replace(/_96_p\.mp4/i, "_320_p.mp4"),
-    url160: decrypted.replace(/_(96|160|320)\.mp4/i, "_160.mp4").replace(/_96_p\.mp4/i, "_160_p.mp4"),
-    url96: decrypted.replace(/_(96|160|320)\.mp4/i, "_96.mp4"),
-    preferredUrl: decrypted.replace(/_(96|160|320)\.mp4/i, suffix),
-  };
-}
 
 // ============================================================================
 // 5. STREAM VALIDATOR & IN-FLIGHT DEDUPLICATION CACHE (`limusic` + `Music-Aura`)
@@ -1041,6 +1030,17 @@ export class UnifiedMusicAPI {
     this.gl = options.gl || "US";
     this.cookie = options.cookie || null;
     this.fetchImpl = options.fetchImpl || fetch;
+    this.gdStudio =
+      options.gdStudioResolver ||
+      new GDStudioMusicResolver({
+        fetchImpl: this.fetchImpl,
+        baseUrl: options.gdStudioBaseUrl,
+        supportedSources: options.gdStudioSources || GDSTUDIO_SOURCE_IDS,
+      });
+    this.kugou = options.kugouResolver || new KugouMusicResolver({ fetchImpl: this.fetchImpl, mid: options.kugouMid });
+    this.deezer =
+      options.deezerResolver ||
+      new DeezerCatalogResolver({ fetchImpl: this.fetchImpl, baseUrl: options.deezerBaseUrl });
     this.visitorData =
       options.visitorData ||
       this._loadLocalVisitorData() ||
@@ -1156,14 +1156,24 @@ export class UnifiedMusicAPI {
    * 3. `TVHTML5_SIMPLY` (`sts` + `poToken` + cipher)
    * 4. `IOS` (direct URL, bounded-range proxy)
    * 5. `ANDROID_VR` (direct URL, verified against 1 MiB cap via tail-range probe)
-   * Plus optional JioSaavn 320kbps AAC cross-provider fallback when `trackMeta` is provided.
+   * Plus match-gated GDStudio (NetEase/Bilibili) and Kugou full-track fallback when metadata is provided.
    */
   async resolveYouTubeStream(videoId, options = {}) {
     const isUpload = Boolean(options.isUpload);
     const preferHigh = options.preferHigh !== false;
     const validate = options.validate !== false;
 
-    return this.streamCache.resolve(`yt:${videoId}:${preferHigh}`, async () => {
+    const fallbackFingerprint = [
+      options.title || "",
+      options.artist || "",
+      options.durationSeconds || "",
+      options.quality || "",
+      options.fallbackSearchLimit || "",
+      options.isUpload ? "upload" : "public",
+      options.validate === false ? "skip-validation" : "validate",
+      options.enableCatalogFallback === false ? "no-catalog-fallback" : "catalog-fallback",
+    ].map((value) => encodeURIComponent(String(value))).join("|");
+    return this.streamCache.resolve(`yt:${videoId}:${preferHigh}:${fallbackFingerprint}`, async () => {
       const order = isUpload ? UPLOAD_FALLBACK_ORDER : STREAM_FALLBACK_ORDER;
       const sts = this.cipher.signatureTimestamp;
       let metadata = null;
@@ -1290,144 +1300,92 @@ export class UnifiedMusicAPI {
         };
       }
 
-      if (fallbackCandidate) {
-        return fallbackCandidate;
-      }
-
-      // Cross-provider fallback to JioSaavn 320kbps AAC if track metadata is available
-      if (options.enableJioSaavnFallback !== false && (options.title || metadata?.title)) {
-        const query = `${options.title || metadata?.title} ${
-          options.artist || metadata?.artist || ""
-        }`.trim();
-        const saavn = await this.resolveJioSaavnStream(query);
-        if (saavn) {
+      // Cross-provider full-track fallback, gated by title/artist/duration matching.
+      if (options.enableCatalogFallback !== false && (options.title || metadata?.title)) {
+        const title = String(options.title || metadata?.title || "").trim();
+        const artist = String(options.artist || metadata?.artist || "").trim();
+        const fallback = await this.resolveCatalogStream({
+          title,
+          artist,
+          durationSeconds: Number(options.durationSeconds || metadata?.durationSeconds) || 0,
+          quality: options.quality || (preferHigh ? "999" : "320"),
+          limit: options.fallbackSearchLimit || 10,
+        });
+        if (fallback) {
+          const headers = fallback.headers || {};
           return {
             videoId,
-            ...saavn,
-            fallbackSource: "jiosaavn",
+            ...fallback,
+            proxyUrl: this.audioProxy.register(
+              fallback.streamUrl,
+              headers,
+              fallback.contentLength,
+              fallback.mimeType
+            ),
+            fallbackSource: fallback.provider,
+            validated: null,
           };
         }
       }
 
-      throw new Error(`All playback clients exhausted for videoId=${videoId}`);
+      // Keep a non-validated YT URL only as a last resort after trying exact catalog matches.
+      if (fallbackCandidate) return fallbackCandidate;
+
+      throw new Error(`All playback clients and catalog fallbacks exhausted for videoId=${videoId}`);
     });
   }
 
   /**
-   * Resolves a 320kbps AAC stream from JioSaavn (`jiosaavn.com/api.php`) using DES-ECB decryption.
-   * Includes the Artist-Playlist Geo-Block Bypass (`autocomplete.get` -> `playlist.getDetails` -> `song.getDetails`)
-   * so Western/International tracks hidden from `search.getResults` (like Maroon 5 - Memories `-RWAZc5D`)
-   * still resolve their direct `aac.saavncdn.com` 320kbps `.mp4` URLs!
+   * Search GDStudio and Kugou, rank exact/near-exact matches, then resolve a full stream.
+   * Deezer is intentionally not used here because its public API only exposes short previews.
    */
-  async resolveJioSaavnStream(query, { targetSongTitle = null } = {}) {
-    const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&api_version=4&ctx=web6dot0&n=5&p=1&q=${encodeURIComponent(
-      query
-    )}`;
-    const headers = {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-      Accept: "application/json",
-    };
+  async resolveCatalogStream({ title, artist = "", durationSeconds = 0, quality = "999", limit = 10 } = {}) {
+    const expected = { title: String(title || "").trim(), artist, durationSeconds };
+    if (!expected.title) return null;
 
-    const res = await this.fetchImpl(searchUrl, { headers });
-    let fallbackHit = null;
-    if (res.ok) {
-      const data = await res.json();
-      const results = data?.results || [];
-      for (const song of results) {
-        const encUrl = song?.more_info?.encrypted_media_url || song?.encrypted_media_url;
-        if (encUrl) {
-          const urls = decryptJioSaavnMediaUrl(encUrl, 320);
-          if (urls?.url320) {
-            const candidate = {
-              id: song.id,
-              title: song.title || song.song,
-              artist:
-                song?.more_info?.artistMap?.primary_artists
-                  ?.map((a) => a.name)
-                  .join(", ") ||
-                song.subtitle ||
-                "",
-              album: song?.more_info?.album || song.album || "",
-              durationSeconds: Number(song?.more_info?.duration || song?.duration) || 0,
-              thumbnail: (song.image || "").replace(/150x150|50x50/, "500x500"),
-              streamUrl: urls.url320,
-              urls,
-              client: "JIOSAAVN_320",
-              mimeType: "audio/mp4",
-              bitrate: 320000,
-              language: song.language || "",
-            };
-            if (song.language !== "instrumental") {
-              return candidate;
-            }
-            if (!fallbackHit) fallbackHit = candidate;
-          }
+    const [gdStudioResult, kugouResult] = await Promise.allSettled([
+      this.gdStudio.searchAcrossSources(`${expected.title} ${artist}`.trim(), { limit }),
+      this.kugou.search(`${expected.title} ${artist}`.trim(), { limit }),
+    ]);
+    const candidates = [];
+    if (gdStudioResult.status === "fulfilled") {
+      for (const track of gdStudioResult.value) {
+        const match = scoreTrackMatch(expected, track);
+        if (match) candidates.push({ provider: "gdstudio", track, match });
+      }
+    }
+    if (kugouResult.status === "fulfilled") {
+      for (const track of kugouResult.value) {
+        const match = scoreTrackMatch(expected, track);
+        if (match) candidates.push({ provider: "kugou", track, match });
+      }
+    }
+    candidates.sort((a, b) => b.match.score - a.match.score);
+
+    for (const candidate of candidates) {
+      try {
+        const resolved =
+          candidate.provider === "gdstudio"
+            ? await this.gdStudio.stream(candidate.track, { quality, fallback: true })
+            : await this.kugou.stream(candidate.track, { quality, fallback: true });
+        if (resolved?.streamUrl) {
+          return {
+            ...resolved,
+            title: resolved.title || candidate.track.title,
+            artist: resolved.artist || candidate.track.artist,
+            durationSeconds: resolved.durationSeconds || candidate.track.durationSeconds,
+            thumbnail: candidate.track.coverUrl || null,
+            matchScore: candidate.match.score,
+            matchDetails: candidate.match,
+            headers: resolved.headers || {},
+          };
         }
+      } catch {
+        // Keep trying the next well-matched provider/candidate.
       }
     }
 
-    // Geo-Block / Instrumental-Cover Bypass via `autocomplete.get` -> `playlist.getDetails` -> `song.getDetails`
-    try {
-      const autoUrl = `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query=${encodeURIComponent(
-        query
-      )}`;
-      const autoRes = await this.fetchImpl(autoUrl, { headers });
-      if (autoRes.ok) {
-        const autoData = await autoRes.json();
-        const playlists = autoData?.playlists?.data || [];
-        for (const pl of playlists.slice(0, 2)) {
-          const plUrl = `https://www.jiosaavn.com/api.php?__call=playlist.getDetails&_format=json&_marker=0&api_version=4&ctx=web6dot0&listid=${encodeURIComponent(
-            pl.id
-          )}`;
-          const plRes = await this.fetchImpl(plUrl, { headers });
-          if (!plRes.ok) continue;
-          const plData = await plRes.json();
-          const pids = (plData?.more_info?.contents || "")
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean)
-            .slice(0, 20);
-          if (pids.length === 0) continue;
-
-          const detailsUrl = `https://www.jiosaavn.com/api.php?__call=song.getDetails&_format=json&cc=in&_marker=0&pids=${encodeURIComponent(
-            pids.join(",")
-          )}`;
-          const detRes = await this.fetchImpl(detailsUrl, { headers });
-          if (!detRes.ok) continue;
-          const detData = await detRes.json();
-          const want = (targetSongTitle || query).toLowerCase();
-          for (const pid of pids) {
-            const track = detData?.[pid];
-            if (!track?.encrypted_media_url) continue;
-            const trackTitle = (track.song || track.title || "").toLowerCase();
-            if (want.includes(trackTitle) || trackTitle.includes(want)) {
-              const urls = decryptJioSaavnMediaUrl(track.encrypted_media_url, 320);
-              return {
-                id: track.id || pid,
-                title: track.song || track.title,
-                artist: track.primary_artists || track.singers || "",
-                album: track.album || "",
-                year: track.year || "",
-                durationSeconds: Number(track.duration) || 0,
-                thumbnail: (track.image || "").replace(/150x150|50x50/, "500x500"),
-                streamUrl: urls.url320,
-                urls,
-                previewUrl: track.media_preview_url || null,
-                vlinkMp3: track.vlink || null,
-                client: "JIOSAAVN_320_BYPASS",
-                mimeType: "audio/mp4",
-                bitrate: 320000,
-              };
-            }
-          }
-        }
-      }
-    } catch {
-      // Ignore bypass errors
-    }
-
-    return fallbackHit;
+    return null;
   }
 
   /**
@@ -1456,9 +1414,8 @@ export class UnifiedMusicAPI {
 
   /**
    * Multi-Provider Synced Lyrics Waterfall:
-   * 1. Boidu (`lyrics-api.boidu.dev/getLyrics?s=...&a=...&al=...&d=...` — Apple Music word-timed TTML)
-   * 2. LyricsPlus (`lyricsplus.binimum.org/v2/lyrics/get` — word-timed JSON)
-   * 3. Kugou (`songsearch.kugou.com` + `krcs.kugou.com` base64 LRC)
+   * 1. Boidu word-timed TTML; 2. LyricsPlus word-timed JSON; 3. GDStudio synced LRC;
+   * 4. Kugou KRC/LRC; 5. NetEase; 6. QQ Music; 7. LRCLIB.
    */
   async resolveSyncedLyrics({ title, artist, album = "", durationSeconds = 0 }) {
     const parseTimeMs = (t) => {
@@ -1526,29 +1483,19 @@ export class UnifiedMusicAPI {
         return null;
       },
       async () => {
-        const kw = encodeURIComponent(`${title} ${artist}`.trim());
-        const searchRes = await this.fetchImpl(
-          `https://songsearch.kugou.com/song_search_v2?keyword=${kw}&page=1&pagesize=5`
-        );
-        if (!searchRes.ok) return null;
-        const sj = await searchRes.json();
-        const hash = sj?.data?.lists?.[0]?.FileHash || sj?.data?.info?.[0]?.hash;
-        if (!hash) return null;
-        const krcSearch = await this.fetchImpl(
-          `https://krcs.kugou.com/search?ver=1&man=yes&client=mobi&hash=${hash}`
-        );
-        if (!krcSearch.ok) return null;
-        const kj = await krcSearch.json();
-        const candidate = kj?.candidates?.[0];
-        if (!candidate?.id || !candidate?.accesskey) return null;
-        const dlRes = await this.fetchImpl(
-          `https://lyrics.kugou.com/download?ver=1&client=pc&id=${candidate.id}&accesskey=${candidate.accesskey}&fmt=lrc`
-        );
-        if (!dlRes.ok) return null;
-        const dj = await dlRes.json();
-        if (!dj?.content) return null;
-        const lrc = Buffer.from(dj.content, "base64").toString("utf8");
-        return { source: "kugou", type: "lrc", lrc };
+        const result = await this.gdStudio.lyrics(`${title} ${artist}`.trim(), { source: "netease" });
+        if (!result?.lyric) return null;
+        return {
+          source: "gdstudio-netease",
+          type: "lrc",
+          lrc: result.lyric,
+          tlyric: result.tlyric || null,
+        };
+      },
+      async () => {
+        const result = await this.kugou.lyrics({ title, artist, durationSeconds });
+        if (!result?.lrc) return null;
+        return { source: "kugou", type: "lrc", lrc: result.lrc, krc: result.krc || null };
       },
       // 4. NetEase Cloud Music (`music.163.com` synced LRC + translation)
       async () => {

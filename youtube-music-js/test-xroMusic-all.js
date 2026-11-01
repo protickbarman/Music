@@ -4,8 +4,8 @@
  * Tests every method on `XroMusicClient` (`xroMusic.js`) using:
  * - Real local YouTube player bundles (`base-ea6f527e.js`, `player_ias.vflset`, `player_es6.vflset`)
  * - Real `sw.js_data.json` visitorData & `faraday_player_configs.json` (`11a45ffb`)
- * - Real captured live payloads from JioSaavn (`jiosaavn.com/api.php`), Internet Archive (`archive.org`),
- *   Boidu Apple Music TTML (`lyrics-api.boidu.dev/getLyrics`), Spotify Embed, and YouTube Music InnerTube
+ * - Captured GDStudio, Kugou, Deezer, Internet Archive, Boidu TTML, Spotify Embed,
+ *   and YouTube Music InnerTube payload fixtures (all network calls are mocked)
  * - Real loopback HTTP `BoundedRangeAudioProxy` streaming & tail-range validation
  */
 
@@ -13,27 +13,49 @@ import assert from "node:assert/strict";
 import { XroMusicClient, SEARCH_FILTER_PARAMS } from "./xroMusic.js";
 
 // Real captured live responses from our `fetch_page` calls + InnerTube fixtures
-const LIVE_JIOSAAVN_SEARCH = {
-  total: 85,
-  start: 1,
-  results: [
-    {
-      id: "57CrrdjC",
-      title: "Shape of You",
-      subtitle: "Boostereo, Audino, Nexeri - Shape of You",
-      image: "https://c.saavncdn.com/444/Shape-of-You-Instrumental-2021-20211029105017-150x150.jpg",
-      more_info: {
-        album: "Shape of You",
-        duration: "140",
-        "320kbps": "true",
-        encrypted_media_url:
-          "ID2ieOjCrwfgWvL5sXl4B1ImC5QfbsDyvLXgmRDc4sU2PxCTFc8QAZmyrcweyHDcSqE5BY2m/62LbSyYYnh61Bw7tS9a8Gtq",
-        artistMap: {
-          primary_artists: [{ id: "1624877", name: "Boostereo" }],
-        },
-      },
-    },
-  ],
+const LIVE_GDSTUDIO_TRACK = {
+  id: "451703096",
+  name: "Shape of You",
+  artist: ["Ed Sheeran"],
+  album: "÷ (Deluxe)",
+  duration: 233,
+  pic_id: "109951171770750671",
+  url_id: "451703096",
+  lyric_id: "451703096",
+};
+
+const LIVE_KUGOU_TRACK = {
+  EMixSongID: "987654321",
+  SongName: "Shape of You",
+  SingerName: "Ed Sheeran",
+  AlbumName: "÷ (Deluxe)",
+  Duration: 233,
+  FileHash: "0123456789ABCDEF0123456789ABCDEF",
+  HQFileHash: "1123456789ABCDEF0123456789ABCDEF",
+  SQFileHash: "2123456789ABCDEF0123456789ABCDEF",
+  ResFileHash: "3123456789ABCDEF0123456789ABCDEF",
+  Privilege: 0,
+  HQPrivilege: 0,
+  SQPrivilege: 0,
+  ResPrivilege: 0,
+  Image: "https://imge.kugou.com/stdmusic/{size}/cover.jpg",
+};
+
+const LIVE_DEEZER_TRACK = {
+  id: 1400843202,
+  title: "Shape of You",
+  title_short: "Shape of You",
+  link: "https://www.deezer.com/track/1400843202",
+  duration: 233,
+  isrc: "GBAHS1600463",
+  preview: "https://cdn.example.test/shape-preview.mp3",
+  artist: { id: 123, name: "Ed Sheeran" },
+  album: {
+    id: 456,
+    title: "÷ (Deluxe)",
+    cover_big: "https://cdn.example.test/shape-cover.jpg",
+    cover_xl: "https://cdn.example.test/shape-cover-xl.jpg",
+  },
 };
 
 const LIVE_ARCHIVE_SEARCH = {
@@ -97,11 +119,93 @@ function createTestFetch() {
     const u = String(url);
     calls.push({ url: u, method: init.method || "GET", body: init.body ? JSON.parse(init.body) : null });
 
-    if (u.includes("jiosaavn.com/api.php")) {
-      return new Response(JSON.stringify(LIVE_JIOSAAVN_SEARCH), {
+    if (u.includes("music-api.gdstudio.xyz/api.php")) {
+      const params = new URL(u).searchParams;
+      const type = params.get("types");
+      let body;
+      if (type === "search") body = [LIVE_GDSTUDIO_TRACK];
+      else if (type === "url") {
+        const br = params.get("br");
+        body = {
+          url: br === "999"
+            ? "https://cdn.example.test/shape-of-you-hires.flac"
+            : br === "740"
+              ? "https://cdn.example.test/shape-of-you-lossless.flac"
+              : "https://cdn.example.test/shape-of-you-320.mp3",
+          br: Number(br),
+          size: 9350836,
+        };
+      } else if (type === "pic") body = { url: "https://cdn.example.test/shape-cover-500.jpg" };
+      else if (type === "lyric") body = { lyric: "[00:12.34]Hello, it's me\n", tlyric: "[00:12.34]你好\n" };
+      else if (type === "playlist") body = { playlist: { id: params.get("id"), name: "Global Hits", tracks: [LIVE_GDSTUDIO_TRACK] } };
+      else body = { detail: `Unexpected GDStudio type: ${type}` };
+      return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
+    }
+
+    if (u.includes("complexsearch.kugou.com/v2/search/song")) {
+      return new Response(JSON.stringify({ error_code: 0, data: { lists: [LIVE_KUGOU_TRACK] } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    if (u.includes("m.kugou.com/app/i/getSongInfo.php")) {
+      return new Response(JSON.stringify({
+        status: 1,
+        url: "https://cdn.example.test/shape-of-you-kugou.mp3",
+        extName: "mp3",
+        bitRate: 320,
+        fileSize: 9350836,
+        timeLength: 233,
+        songName: "Shape of You",
+        singerName: "Ed Sheeran",
+        albumName: "÷ (Deluxe)",
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    if (u.includes("krcs.kugou.com/search")) {
+      return new Response(JSON.stringify({ candidates: [{
+        id: "lyric-1", accesskey: "access-1", song: "Shape of You", singer: "Ed Sheeran", duration: 233000,
+      }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    if (u.includes("krcs.kugou.com/download")) {
+      return new Response(JSON.stringify({
+        content: Buffer.from("[00:12.34]Hello, it's me\n").toString("base64"),
+        contenttype: 1,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    if (u.includes("api.deezer.com/search")) {
+      return new Response(JSON.stringify({ data: [LIVE_DEEZER_TRACK], total: 1 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (u.includes("api.deezer.com/track/")) {
+      return new Response(JSON.stringify(LIVE_DEEZER_TRACK), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (u.includes("api.deezer.com/album/")) {
+      return new Response(JSON.stringify({
+        id: 456,
+        title: "÷ (Deluxe)",
+        artist: { name: "Ed Sheeran" },
+        cover_xl: "https://cdn.example.test/shape-cover-xl.jpg",
+        tracks: { data: [LIVE_DEEZER_TRACK] },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (u.includes("api.deezer.com/artist/") && u.includes("/top")) {
+      return new Response(JSON.stringify({ data: [LIVE_DEEZER_TRACK] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (u.includes("api.deezer.com/chart")) {
+      return new Response(JSON.stringify({
+        tracks: { data: [LIVE_DEEZER_TRACK] },
+        albums: { data: [{ id: 456, title: "÷ (Deluxe)", artist: { name: "Ed Sheeran" }, cover_big: "https://cdn.example.test/shape-cover.jpg" }] },
+        artists: { data: [{ id: 123, name: "Ed Sheeran" }] },
+      }), { status: 200, headers: { "content-type": "application/json" } });
     }
 
     if (u.includes("archive.org/advancedsearch.php")) {
@@ -300,8 +404,11 @@ async function runAllTests() {
   const searchSongs = await xroMusic.search("Blinding Lights", { type: "songs", source: "ytmusic" });
   assert.equal(searchSongs.params, SEARCH_FILTER_PARAMS.songs);
   const searchAll = await xroMusic.search("Shape of You", { source: "all" });
-  assert.ok(searchAll.ytmusic && searchAll.jiosaavn);
-  record("xroMusic.search()", `ytmResults=${searchSongs.results.length}, saavnResults=${searchAll.jiosaavn.length}`);
+  assert.ok(searchAll.ytmusic && searchAll.gdstudio && searchAll.kugou && searchAll.deezer);
+  record(
+    "xroMusic.search()",
+    `ytmResults=${searchSongs.results.length}, gdStudioResults=${searchAll.gdstudio.length}, kugouResults=${searchAll.kugou.length}, deezerResults=${searchAll.deezer.length}`
+  );
 
   // 4. xroMusic.suggestions
   const sugg = await xroMusic.suggestions("blinding");
@@ -402,17 +509,75 @@ async function runAllTests() {
   assert.ok(proxyDownloaded.equals(audioBytes));
   record("xroMusic.proxyWrap()", `HTTP ${proxyHttpRes.status}, downloaded=${proxyDownloaded.length} bytes via loopback`);
 
-  // 20. xroMusic.saavnSearch
-  const saavnList = await xroMusic.saavnSearch("Shape of You");
-  assert.equal(saavnList.length, 1);
-  assert.ok(saavnList[0].streams.url320.endsWith("_320.mp4"));
-  record("xroMusic.saavnSearch()", `title="${saavnList[0].title}", url320=${saavnList[0].streams.url320}`);
+  // 20–25. GDStudio search, full-stream quality, cover, lyrics, playlist, and charts
+  const gdList = await xroMusic.gdStudioSearch("Shape of You", { source: "netease" });
+  assert.equal(gdList[0].title, "Shape of You");
+  assert.equal(gdList[0].artist, "Ed Sheeran");
+  record("xroMusic.gdStudioSearch()", `track=${gdList[0].title} — ${gdList[0].artist}`);
 
-  // 21. xroMusic.saavnStream
-  const saavnDirect = await xroMusic.saavnStream("Shape of You");
-  assert.equal(saavnDirect.client, "JIOSAAVN_320");
-  assert.equal(saavnDirect.bitrate, 320000);
-  record("xroMusic.saavnStream()", `client=${saavnDirect.client}, streamUrl=${saavnDirect.streamUrl}`);
+  const gdStream = await xroMusic.gdStudioStream(gdList[0], { quality: "320" });
+  assert.equal(gdStream.client, "GDSTUDIO");
+  assert.equal(gdStream.bitrate, 320000);
+  assert.ok(gdStream.streamUrl.endsWith("shape-of-you-320.mp3"));
+  record("xroMusic.gdStudioStream()", `quality=${gdStream.quality}, br=${gdStream.bitrate}, url=${gdStream.streamUrl}`);
+
+  const gdCover = await xroMusic.gdStudioCover(gdList[0], { size: 500 });
+  assert.equal(gdCover, "https://cdn.example.test/shape-cover-500.jpg");
+  record("xroMusic.gdStudioCover()", `coverUrl=${gdCover}`);
+
+  const gdLyrics = await xroMusic.gdStudioLyrics(gdList[0]);
+  assert.equal(gdLyrics.source, "netease");
+  assert.ok(gdLyrics.lyric.includes("Hello, it's me"));
+  assert.ok(gdLyrics.tlyric.includes("你好"));
+  record("xroMusic.gdStudioLyrics()", `source=${gdLyrics.source}, translated=${Boolean(gdLyrics.tlyric)}`);
+
+  const gdPlaylist = await xroMusic.gdStudioPlaylist("2809513713");
+  assert.equal(gdPlaylist.name, "Global Hits");
+  assert.equal(gdPlaylist.tracks.length, 1);
+  record("xroMusic.gdStudioPlaylist()", `name=${gdPlaylist.name}, tracks=${gdPlaylist.tracks.length}`);
+
+  const gdCharts = xroMusic.gdStudioCharts();
+  assert.ok(gdCharts.some((chart) => chart.id === "2809513713"));
+  record("xroMusic.gdStudioCharts()", `chartDefinitions=${gdCharts.length}`);
+
+  // 26–28. Kugou full stream and synced lyrics, plus signed web search
+  const kugouList = await xroMusic.kugouSearch("Shape of You Ed Sheeran");
+  assert.equal(kugouList[0].title, "Shape of You");
+  assert.equal(kugouList[0].hashes.mp3_320, LIVE_KUGOU_TRACK.HQFileHash);
+  record("xroMusic.kugouSearch()", `track=${kugouList[0].title}, 320Hash=${kugouList[0].hashes.mp3_320}`);
+
+  const kugouStream = await xroMusic.kugouStream(kugouList[0], { quality: "320" });
+  assert.equal(kugouStream.client, "KUGOU_MOBILE");
+  assert.equal(kugouStream.bitrate, 320000);
+  record("xroMusic.kugouStream()", `quality=${kugouStream.quality}, bitrate=${kugouStream.bitrate}`);
+
+  const kugouLyrics = await xroMusic.kugouLyrics({ title: "Shape of You", artist: "Ed Sheeran", durationSeconds: 233 });
+  assert.equal(kugouLyrics.source, "kugou");
+  assert.ok(kugouLyrics.lrc.includes("Hello, it's me"));
+  record("xroMusic.kugouLyrics()", `source=${kugouLyrics.source}, timedLrc=${kugouLyrics.lrc.split("\n").length} line(s)`);
+
+  // 29–33. Deezer catalog metadata and short-preview surfaces (not full-song streaming)
+  const deezerList = await xroMusic.deezerSearch("Shape of You Ed Sheeran");
+  assert.equal(deezerList[0].isrc, "GBAHS1600463");
+  assert.equal(deezerList[0].fullStreamAvailable, false);
+  record("xroMusic.deezerSearch()", `ISRC=${deezerList[0].isrc}, preview=${Boolean(deezerList[0].previewUrl)}`);
+
+  const deezerTrack = await xroMusic.deezerTrack("1400843202");
+  assert.equal(deezerTrack.title, "Shape of You");
+  record("xroMusic.deezerTrack()", `title=${deezerTrack.title}, album=${deezerTrack.album}`);
+
+  const deezerAlbum = await xroMusic.deezerAlbum("456");
+  assert.equal(deezerAlbum.tracks.length, 1);
+  record("xroMusic.deezerAlbum()", `title=${deezerAlbum.title}, tracks=${deezerAlbum.tracks.length}`);
+
+  const deezerTop = await xroMusic.deezerArtistTop("123");
+  assert.equal(deezerTop[0].artist, "Ed Sheeran");
+  record("xroMusic.deezerArtistTop()", `topTracks=${deezerTop.length}`);
+
+  const deezerCharts = await xroMusic.deezerCharts();
+  assert.equal(deezerCharts.tracks.length, 1);
+  assert.equal(deezerCharts.artists[0].name, "Ed Sheeran");
+  record("xroMusic.deezerCharts()", `tracks=${deezerCharts.tracks.length}, artists=${deezerCharts.artists.length}`);
 
   // 22. xroMusic.archiveSearch
   const archDocs = await xroMusic.archiveSearch("lofi");
@@ -479,7 +644,7 @@ async function runAllTests() {
   assert.equal(stopRes.stopped, true);
   record("xroMusic.scrobble()", `scrobbled=${scrobbleRes.scrobbled}, HTTP ${scrobbleRes.status}, proxyStopped=${stopRes.stopped}`);
 
-  console.log(`\n🎉 ALL ${results.length}/28 xroMusic OPERATIONS TESTED & PASSED!`);
+  console.log(`\n🎉 ALL ${results.length}/40 xroMusic OPERATIONS TESTED & PASSED!`);
 }
 
 runAllTests().catch((err) => {

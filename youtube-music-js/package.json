@@ -1,0 +1,19 @@
+{
+  "name": "xromusic-unified-client",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "exports": {
+    ".": "./xroMusic.js",
+    "./core": "./unified-music-api.js",
+    "./resolvers": "./music-source-resolvers.js"
+  },
+  "scripts": {
+    "test": "npm run test:api && npm run test:client",
+    "test:api": "node test-unified-api.js",
+    "test:client": "node test-xroMusic-all.js"
+  }
+}

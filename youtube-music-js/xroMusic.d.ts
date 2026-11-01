@@ -10,25 +10,69 @@ export type SearchType =
   | "podcasts"
   | "episodes";
 
-export type SearchSource = "ytmusic" | "saavn" | "archive" | "all";
+export type SearchSource =
+  | "ytmusic"
+  | "gdstudio"
+  | "gd"
+  | "netease"
+  | "bilibili"
+  | "kugou"
+  | "deezer"
+  | "archive"
+  | "all";
+
+export type GDStudioQuality = "999" | "740" | "320" | "192" | "128" | "hires" | "lossless" | "flac";
+
+export interface MusicCatalogTrack {
+  id: string;
+  provider: "gdstudio" | "kugou" | "deezer" | string;
+  source: string;
+  title: string;
+  artist: string;
+  artists: string[];
+  album?: string;
+  durationSeconds?: number;
+  coverId?: string | null;
+  coverUrl?: string | null;
+  previewUrl?: string | null;
+  isrc?: string | null;
+  hashes?: Record<string, string | null>;
+  raw?: unknown;
+}
 
 export interface StreamResolution {
-  videoId: string;
+  videoId?: string;
+  id?: string;
+  provider?: string;
+  source?: string;
   streamUrl: string;
-  proxyUrl: string;
-  client: "WEB_REMIX" | "VISIONOS" | "TVHTML5_SIMPLY" | "IOS" | "ANDROID_VR" | "JIOSAAVN_320" | "INTERNET_ARCHIVE";
+  proxyUrl?: string;
+  client: "WEB_REMIX" | "VISIONOS" | "TVHTML5_SIMPLY" | "IOS" | "ANDROID_VR" | "GDSTUDIO" | "KUGOU_MOBILE" | "INTERNET_ARCHIVE" | string;
   itag?: number;
   mimeType: string;
-  bitrate: number;
-  audioQuality?: string;
+  bitrate?: number | null;
+  bitrateKbps?: number | null;
+  quality?: string;
+  br?: string;
+  requestedBr?: string;
+  isLossless?: boolean;
   contentLength?: number | null;
   expiresInSeconds?: number;
   headers?: Record<string, string>;
-  validated?: boolean;
+  validated?: boolean | null;
+  fallbackSource?: string;
+  matchScore?: number;
   title?: string;
   artist?: string;
   durationSeconds?: number;
   thumbnail?: string | null;
+  coverUrl?: string | null;
+}
+
+export interface GDStudioChart {
+  id: string;
+  name: string;
+  source: string;
 }
 
 export declare class XroMusicClient {
@@ -66,6 +110,8 @@ export declare class XroMusicClient {
       source?: SearchSource;
       limit?: number;
       continuation?: string | null;
+      gdSource?: "netease" | "bilibili";
+      gdSources?: Array<"netease" | "bilibili">;
     }
   ): Promise<any>;
   suggestions(input: string): Promise<any>;
@@ -92,9 +138,12 @@ export declare class XroMusicClient {
       preferHigh?: boolean;
       validate?: boolean;
       isUpload?: boolean;
-      enableJioSaavnFallback?: boolean;
+      enableCatalogFallback?: boolean;
       title?: string;
       artist?: string;
+      durationSeconds?: number;
+      quality?: GDStudioQuality | "320k" | "128k";
+      fallbackSearchLimit?: number;
     }
   ): Promise<StreamResolution>;
   videoStream(videoId: string, options?: { maxHeight?: number }): Promise<any>;
@@ -116,13 +165,48 @@ export declare class XroMusicClient {
   ): string;
   proxyStop(): Promise<{ stopped: boolean }>;
 
-  // 5. JioSaavn & Internet Archive
-  saavnSearch(query: string, options?: { limit?: number }): Promise<any[]>;
-  saavnStream(queryOrEncryptedUrl: string): Promise<any>;
-  archiveSearch(query: string, options?: { limit?: number }): Promise<any[]>;
-  archiveStream(identifier: string): Promise<any>;
+  // 5. GDStudio full tracks, artwork, lyrics, playlists & charts
+  gdStudioSearch(query: string, options?: { source?: "netease" | "bilibili"; limit?: number; page?: number }): Promise<MusicCatalogTrack[]>;
+  gdStudioSearchAll(
+    query: string,
+    options?: { sources?: Array<"netease" | "bilibili">; limit?: number; page?: number }
+  ): Promise<MusicCatalogTrack[]>;
+  gdStudioStream(
+    trackOrQuery: MusicCatalogTrack | string,
+    options?: { source?: "netease" | "bilibili"; quality?: GDStudioQuality; fallback?: boolean; limit?: number }
+  ): Promise<StreamResolution | null>;
+  gdStudioCover(trackOrId: MusicCatalogTrack | string, options?: { source?: "netease" | "bilibili"; size?: number }): Promise<string | null>;
+  gdStudioLyrics(
+    trackOrQuery: MusicCatalogTrack | string,
+    options?: { source?: "netease" | "bilibili"; limit?: number }
+  ): Promise<any>;
+  gdStudioPlaylist(id: string, options?: { source?: "netease" | "bilibili" }): Promise<any>;
+  gdStudioCharts(): GDStudioChart[];
+  gdStudioChart(id: string, options?: { source?: "netease" | "bilibili" }): Promise<any>;
 
-  // 6. Synced Lyrics
+  // 6. Kugou search, free-track full streams, and synced lyrics
+  kugouSearch(query: string, options?: { limit?: number; page?: number }): Promise<MusicCatalogTrack[]>;
+  kugouStream(
+    trackOrQuery: MusicCatalogTrack | string,
+    options?: { quality?: "999" | "740" | "320" | "128" | "hires" | "flac" | "lossless"; fallback?: boolean; limit?: number }
+  ): Promise<StreamResolution | null>;
+  kugouLyrics(
+    trackOrTitle: MusicCatalogTrack | string,
+    options?: { artist?: string; durationSeconds?: number }
+  ): Promise<any>;
+
+  // 7. Deezer metadata/catalog (public API only provides short previews)
+  deezerSearch(query: string, options?: { limit?: number; index?: number }): Promise<MusicCatalogTrack[]>;
+  deezerTrack(id: string): Promise<MusicCatalogTrack | null>;
+  deezerAlbum(id: string): Promise<any>;
+  deezerArtistTop(id: string, options?: { limit?: number }): Promise<MusicCatalogTrack[]>;
+  deezerCharts(options?: { limit?: number }): Promise<any>;
+
+  // 8. Internet Archive
+  archiveSearch(query: string, options?: { limit?: number }): Promise<any[]>;
+  archiveStream(identifier: string): Promise<StreamResolution | null>;
+
+  // 9. Synced Lyrics
   lyrics(options: {
     videoId?: string | null;
     lyricsBrowseId?: string | null;
@@ -132,7 +216,7 @@ export declare class XroMusicClient {
     durationSeconds?: number;
   }): Promise<any>;
 
-  // 7. Queue, Library, Spotify Import & Scrobbling
+  // 10. Queue, Library, Spotify Import & Scrobbling
   queue: {
     get(): any;
     set(tracks: any[], startIndex?: number): any;

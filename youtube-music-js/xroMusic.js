@@ -6,9 +6,11 @@
  * - Universal `node:vm` Player Cipher (`s`) & Anti-Throttle (`n`) Engine (ES5 `player_ias` + ES6 `player_es6` + Faraday Registry)
  * - `sw.js_data` `visitorData` & `bgutils` `poToken` Minting
  * - Loopback 4 MiB Bounded-Range Audio Proxy (`googlevideo.com` & `c.youtube.com` unthrottler)
- * - JioSaavn 320kbps AAC Direct Engine (OpenSSL 3.0 native Triple-DES EDE3 `38346591`)
+ * - GDStudio / NetEase-Bilibili 320kbps MP3 + lossless/Hi-Res FLAC search and stream
+ * - Kugou Web-salt search + free-track direct streams + KRC/LRC lyrics
+ * - Deezer public catalog, ISRC, artwork, charts, and preview metadata (no full stream)
  * - Internet Archive (`archive.org`) Lossless FLAC / MP3 Engine
- * - 5-Provider Synced Lyrics Waterfall (IOS_MUSIC, Boidu/LyricsPlus, Kugou, NetEase, QQ Music)
+ * - Multi-provider synced lyrics waterfall (GDStudio, Kugou, NetEase, QQ, LRCLIB, TTML)
  * - Spotify Public Embed Track/Playlist Importer & ListenBrainz/Last.fm Scrobbler
  */
 
@@ -21,7 +23,6 @@ import {
   STREAM_FALLBACK_ORDER,
   UPLOAD_FALLBACK_ORDER,
   derivePlayerConfigFromJs,
-  decryptJioSaavnMediaUrl,
   extractVisitorDataFromSwJsData,
   generateColdStartPoToken,
   validateStreamUrl,
@@ -107,28 +108,57 @@ export class XroMusicClient {
   // ==========================================================================
 
   /**
-   * xroMusic.search(query, options)
-   * Unified search across YouTube Music (`songs`, `videos`, `albums`, `artists`, `playlists`, `podcasts`),
-   * JioSaavn (`saavn`), and Internet Archive (`archive`).
+   * Search YouTube Music, GDStudio (NetEase/Bilibili), Kugou, Deezer, or the Internet Archive.
+   * `source: "all"` runs the configured catalogs concurrently; Deezer is metadata/preview only.
    */
-  async search(query, { type = "songs", source = "ytmusic", limit = 20, continuation = null } = {}) {
-    if (source === "saavn" || source === "jiosaavn") {
-      return this.saavnSearch(query, { limit });
+  async search(
+    query,
+    {
+      type = "songs",
+      source = "ytmusic",
+      limit = 20,
+      continuation = null,
+      gdSource = "netease",
+      gdSources = undefined,
+    } = {}
+  ) {
+    if (["gdstudio", "gd", "netease", "bilibili"].includes(source)) {
+      const selectedSource = source === "netease" || source === "bilibili" ? source : gdSource;
+      return source === "gdstudio" && gdSources
+        ? this.core.gdStudio.searchAcrossSources(query, { sources: gdSources, limit })
+        : this.core.gdStudio.search(query, { source: selectedSource, limit });
     }
-    if (source === "archive") {
-      return this.archiveSearch(query, { limit });
-    }
+    if (source === "kugou") return this.core.kugou.search(query, { limit });
+    if (source === "deezer") return this.core.deezer.search(query, { limit });
+    if (source === "archive") return this.archiveSearch(query, { limit });
     if (source === "all") {
-      const [ytm, saavn] = await Promise.allSettled([
-        this.search(query, { type, source: "ytmusic", limit }),
-        this.saavnSearch(query, { limit: 5 }),
+      const [ytmusic, gdstudio, kugou, deezer, archive] = await Promise.allSettled([
+        this.search(query, { type, source: "ytmusic", limit, continuation }),
+        this.core.gdStudio.searchAcrossSources(query, { limit }),
+        this.core.kugou.search(query, { limit }),
+        this.core.deezer.search(query, { limit }),
+        this.archiveSearch(query, { limit }),
       ]);
+      const valueOrNull = (result) => (result.status === "fulfilled" ? result.value : null);
+      const errorOrNull = (result) =>
+        result.status === "rejected" ? String(result.reason?.message || result.reason) : null;
       return {
         query,
-        ytmusic: ytm.status === "fulfilled" ? ytm.value : null,
-        jiosaavn: saavn.status === "fulfilled" ? saavn.value : null,
+        ytmusic: valueOrNull(ytmusic),
+        gdstudio: valueOrNull(gdstudio),
+        kugou: valueOrNull(kugou),
+        deezer: valueOrNull(deezer),
+        archive: valueOrNull(archive),
+        errors: {
+          ytmusic: errorOrNull(ytmusic),
+          gdstudio: errorOrNull(gdstudio),
+          kugou: errorOrNull(kugou),
+          deezer: errorOrNull(deezer),
+          archive: errorOrNull(archive),
+        },
       };
     }
+    if (source !== "ytmusic") throw new Error(`Unsupported music search source: ${source}`);
 
     const payload = continuation
       ? { continuation }
@@ -273,7 +303,7 @@ export class XroMusicClient {
    * 2. Universal `node:vm` `signatureCipher` (`s`) decipher + `n`-param anti-throttle transform + `&pot=`
    * 3. Tail-range 256-byte probe (`validateStreamUrl`) to block 1 MiB-capped URLs
    * 4. Loopback 4 MiB bounded-range proxy URL (`proxyUrl`)
-   * 5. Automatic JioSaavn 320kbps AAC fallback if all YouTube clients are blocked
+   * 5. Match-gated GDStudio (NetEase/Bilibili) and Kugou full-track fallback if YT clients fail
    */
   async stream(videoId, options = {}) {
     return this.core.resolveYouTubeStream(videoId, options);
@@ -377,118 +407,81 @@ export class XroMusicClient {
   }
 
   // ==========================================================================
-  // 5. JIOSAAVN (320KBPS AAC) & INTERNET ARCHIVE OPERATIONS
+  // 5. GDSTUDIO, KUGOU, DEEZER & INTERNET ARCHIVE OPERATIONS
   // ==========================================================================
 
-  /**
-   * xroMusic.saavnSearch(query, { limit })
-   * Searches JioSaavn and automatically decrypts `encrypted_media_url` into 320kbps/160kbps/96kbps AAC URLs.
-   */
-  async saavnSearch(query, { limit = 10 } = {}) {
-    const url = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&api_version=4&ctx=web6dot0&n=${limit}&p=1&q=${encodeURIComponent(
-      query
-    )}`;
-    const res = await this.core.fetchImpl(url);
-    if (!res.ok) throw new Error(`JioSaavn search failed: HTTP ${res.status}`);
-    const data = await res.json();
-    return (data.results || []).map((song) => {
-      const enc = song?.more_info?.encrypted_media_url || song?.encrypted_media_url;
-      return {
-        id: song.id,
-        title: song.title || song.song,
-        subtitle: song.subtitle,
-        album: song?.more_info?.album,
-        durationSeconds: Number(song?.more_info?.duration || song?.duration) || 0,
-        image: (song.image || "").replace(/150x150|50x50/, "500x500"),
-        streams: enc ? decryptJioSaavnMediaUrl(enc, 320) : null,
-      };
-    });
+  async gdStudioSearch(query, { source = "netease", limit = 20, page = 1 } = {}) {
+    return this.core.gdStudio.search(query, { source, limit, page });
   }
 
-  /**
-   * xroMusic.saavnStream(queryOrEncryptedUrl)
-   * Resolves or decrypts a direct 320kbps AAC (`.mp4`) stream from JioSaavn.
-   */
-  async saavnStream(queryOrEncryptedUrl) {
-    if (
-      typeof queryOrEncryptedUrl === "string" &&
-      queryOrEncryptedUrl.length > 48 &&
-      !queryOrEncryptedUrl.includes(" ")
-    ) {
-      return decryptJioSaavnMediaUrl(queryOrEncryptedUrl, 320);
+  async gdStudioSearchAll(query, { sources, limit = 20, page = 1 } = {}) {
+    return this.core.gdStudio.searchAcrossSources(query, { sources, limit, page });
+  }
+
+  async gdStudioStream(trackOrQuery, { source = "netease", quality = "999", fallback = true, limit = 10 } = {}) {
+    let track = trackOrQuery;
+    if (typeof trackOrQuery === "string") {
+      const results = await this.core.gdStudio.search(trackOrQuery, { source, limit });
+      track = results[0] || null;
     }
-    return this.core.resolveJioSaavnStream(queryOrEncryptedUrl);
+    return track ? this.core.gdStudio.stream(track, { source, quality, fallback }) : null;
   }
 
-  /**
-   * xroMusic.saavnLaunchData() / saavnTrending() / saavnTopArtists() / saavnSongDetails() / saavnAlbum() / saavnPlaylist() / saavnArtist()
-   * Complete JioSaavn (`jiosaavn.com/api.php`) catalog & discovery methods.
-   */
-  async saavnLaunchData() {
-    const res = await this.core.fetchImpl(
-      "https://www.jiosaavn.com/api.php?__call=webapi.getLaunchData&api_version=4&_format=json&_marker=0&ctx=web6dot0"
-    );
-    return res.ok ? res.json() : null;
+  async gdStudioCover(trackOrId, options = {}) {
+    return this.core.gdStudio.cover(trackOrId, options);
   }
 
-  async saavnTrending({ type = "song", language = "english,hindi" } = {}) {
-    const res = await this.core.fetchImpl(
-      `https://www.jiosaavn.com/api.php?__call=content.getTrending&api_version=4&_format=json&_marker=0&ctx=web6dot0&entity_type=${encodeURIComponent(
-        type
-      )}&entity_language=${encodeURIComponent(language)}`
-    );
-    return res.ok ? res.json() : null;
+  async gdStudioLyrics(trackOrQuery, options = {}) {
+    return this.core.gdStudio.lyrics(trackOrQuery, options);
   }
 
-  async saavnTopArtists() {
-    const res = await this.core.fetchImpl(
-      "https://www.jiosaavn.com/api.php?__call=social.getTopArtists&api_version=4&_format=json&_marker=0&ctx=web6dot0"
-    );
-    return res.ok ? res.json() : null;
+  async gdStudioPlaylist(id, options = {}) {
+    return this.core.gdStudio.playlist(id, options);
   }
 
-  async saavnSongDetails(pids) {
-    const pidStr = Array.isArray(pids) ? pids.join(",") : String(pids);
-    const res = await this.core.fetchImpl(
-      `https://www.jiosaavn.com/api.php?__call=song.getDetails&_format=json&cc=in&_marker=0&pids=${encodeURIComponent(
-        pidStr
-      )}`
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    for (const track of Object.values(data || {})) {
-      if (track && typeof track === "object" && track.encrypted_media_url) {
-        track.streams = decryptJioSaavnMediaUrl(track.encrypted_media_url, 320);
-      }
+  gdStudioCharts() {
+    return this.core.gdStudio.chartList();
+  }
+
+  async gdStudioChart(id, options = {}) {
+    return this.core.gdStudio.chart(id, options);
+  }
+
+  async kugouSearch(query, options = {}) {
+    return this.core.kugou.search(query, options);
+  }
+
+  async kugouStream(trackOrQuery, { quality = "320", fallback = true, limit = 10 } = {}) {
+    let track = trackOrQuery;
+    if (typeof trackOrQuery === "string" && !/^[a-f0-9]{32}$/i.test(trackOrQuery.trim())) {
+      const results = await this.core.kugou.search(trackOrQuery, { limit });
+      track = results[0] || null;
     }
-    return data;
+    return track ? this.core.kugou.stream(track, { quality, fallback }) : null;
   }
 
-  async saavnAlbum(albumId) {
-    const res = await this.core.fetchImpl(
-      `https://www.jiosaavn.com/api.php?__call=content.getAlbumDetails&_format=json&cc=in&_marker=0&albumid=${encodeURIComponent(
-        albumId
-      )}`
-    );
-    return res.ok ? res.json() : null;
+  async kugouLyrics(trackOrTitle, options = {}) {
+    return this.core.kugou.lyrics(trackOrTitle, options);
   }
 
-  async saavnPlaylist(listId) {
-    const res = await this.core.fetchImpl(
-      `https://www.jiosaavn.com/api.php?__call=playlist.getDetails&_format=json&_marker=0&api_version=4&ctx=web6dot0&listid=${encodeURIComponent(
-        listId
-      )}`
-    );
-    return res.ok ? res.json() : null;
+  async deezerSearch(query, options = {}) {
+    return this.core.deezer.search(query, options);
   }
 
-  async saavnArtist(artistId, { songCount = 15, albumCount = 10 } = {}) {
-    const res = await this.core.fetchImpl(
-      `https://www.jiosaavn.com/api.php?__call=artist.getArtistPageDetails&_format=json&_marker=0&api_version=4&ctx=web6dot0&artistId=${encodeURIComponent(
-        artistId
-      )}&n_song=${songCount}&n_album=${albumCount}`
-    );
-    return res.ok ? res.json() : null;
+  async deezerTrack(id) {
+    return this.core.deezer.track(id);
+  }
+
+  async deezerAlbum(id) {
+    return this.core.deezer.album(id);
+  }
+
+  async deezerArtistTop(id, options = {}) {
+    return this.core.deezer.artistTop(id, options);
+  }
+
+  async deezerCharts(options = {}) {
+    return this.core.deezer.charts(options);
   }
 
   /**
@@ -516,12 +509,8 @@ export class XroMusicClient {
 
   /**
    * xroMusic.lyrics({ videoId, lyricsBrowseId, title, artist, album, durationSeconds })
-   * 5-provider synced lyrics waterfall:
-   * 1. InnerTube `IOS_MUSIC` timed lyrics (`timedLyricsData`) / `WEB_REMIX` lyrics
-   * 2. Boidu / LyricsPlus (`lyrics-api.boidu.dev` syllable/word-synced)
-   * 3. Kugou (`msearchcdn.kugou.com` + `krcs.kugou.com` Base64 LRC)
-   * 4. NetEase (`music.163.com`)
-   * 5. QQ Music (`c.y.qq.com`)
+   * YouTube Music lyrics first when a browse ID is available, then seven external fallbacks:
+   * Boidu, LyricsPlus, GDStudio, Kugou KRC, NetEase, QQ Music, and LRCLIB.
    */
   async lyrics({ videoId = null, lyricsBrowseId = null, title = "", artist = "", album = "", durationSeconds = 0 } = {}) {
     if (lyricsBrowseId) {
