@@ -33,6 +33,16 @@ const stream = await xroMusic.gdStudioStream(track[0], { quality: "999" });
 
 For a YouTube Music track, `xroMusic.stream(videoId, { title, artist, durationSeconds })` uses the YouTube client waterfall first, then only accepts a sufficiently matched external full-track candidate.
 
+## Optional YouTube Music authentication
+
+Public content does not require a cookie. For supported signed-in requests, the client accepts a Cookie header or a browser-exported JSON object through `init({ cookie })` / `setAuth({ cookie })`. It also reads `YTM_COOKIE` (raw header) or `YTM_COOKIE_FILE` (a local JSON export or raw header file) when the process starts:
+
+```sh
+YTM_COOKIE_FILE="/private/path/cookies.json" node app.js
+```
+
+The export is filtered to unexpired `youtube.com` cookies and scoped to YouTube Music. When a supported SAPISID cookie is present, the client computes the InnerTube `SAPISIDHASH` authorization header in memory. Keep the file outside the repository, never paste it into chat, and never commit it; cookie exports grant account access. Authentication can enable supported account-specific requests, but it cannot guarantee playback for every track or region.
+
 ## Bundled runtime data
 
 The client uses checked-in player/cipher fixtures for local cipher operation and deterministic tests:

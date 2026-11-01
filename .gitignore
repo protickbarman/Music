@@ -1,3 +1,9 @@
+# Authentication secrets and browser-exported session cookies must never be committed.
+*cookies*.json
+.env
+.env.*
+!.env.example
+
 # Downloaded upstream repositories and full app bundles are retained locally for reference,
 # but only the runtime/test fixtures named in youtube-music-js/README.md are committed.
 /youtube-music-js/faraday-cipher-ts/

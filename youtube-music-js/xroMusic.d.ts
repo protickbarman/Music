@@ -23,6 +23,22 @@ export type SearchSource =
 
 export type GDStudioQuality = "999" | "740" | "320" | "192" | "128" | "hires" | "lossless" | "flac";
 
+export interface YouTubeCookie {
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+  expirationDate?: number;
+  expires?: number | string;
+  session?: boolean;
+}
+
+export type YouTubeCookieInput =
+  | string
+  | YouTubeCookie[]
+  | { url?: string; cookies: YouTubeCookie[] }
+  | null;
+
 export interface MusicCatalogTrack {
   id: string;
   provider: "gdstudio" | "kugou" | "deezer" | string;
@@ -80,7 +96,7 @@ export declare class XroMusicClient {
   init(options?: {
     hl?: string;
     gl?: string;
-    cookie?: string;
+    cookie?: YouTubeCookieInput;
     startProxy?: boolean;
     proxyPort?: number;
   }): Promise<{
@@ -94,7 +110,7 @@ export declare class XroMusicClient {
   }>;
 
   setAuth(options: {
-    cookie?: string;
+    cookie?: YouTubeCookieInput;
     visitorData?: string;
     poToken?: string;
     listenBrainzToken?: string;

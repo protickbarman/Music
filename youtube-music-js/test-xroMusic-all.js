@@ -394,10 +394,22 @@ async function runAllTests() {
 
   // 2. xroMusic.setAuth
   const authRes = xroMusic.setAuth({
-    cookie: "SAPISID=test_cookie_val",
+    cookie: {
+      url: "https://music.youtube.com/",
+      cookies: [{
+        name: "SAPISID",
+        value: "test_cookie_val",
+        domain: ".youtube.com",
+        path: "/",
+        expirationDate: Math.floor(Date.now() / 1000) + 3600,
+      }],
+    },
     listenBrainzToken: "lb_test_token_123",
   });
   assert.equal(authRes.authenticated, true);
+  const authenticatedHeaders = xroMusic.core.buildClientHeaders("WEB_REMIX");
+  assert.equal(authenticatedHeaders.Cookie, "SAPISID=test_cookie_val");
+  assert.match(authenticatedHeaders.Authorization, /^SAPISIDHASH \d+_[a-f0-9]{40}$/);
   record("xroMusic.setAuth()", `authenticated=${authRes.authenticated}`);
 
   // 3. xroMusic.search (YTMusic songs, videos, albums, all providers)

@@ -15,6 +15,7 @@ import {
   DeezerCatalogResolver,
   signKugouWebParams,
   generateColdStartPoToken,
+  normalizeCookieHeader,
   validateStreamUrl,
 } from "./unified-music-api.js";
 
@@ -22,7 +23,38 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function runTests() {
-  console.log("=== 1. Testing UniversalCipherEngine across ES5 & ES6 player bundles + Registry ===");
+  console.log("=== 0. Testing browser-export cookie normalization (synthetic credentials only) ===");
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const cookieExport = {
+    url: "https://music.youtube.com/",
+    cookies: [
+      { name: "SID", value: "unit-test-session", domain: ".youtube.com", path: "/", expirationDate: nowSeconds + 3600 },
+      { name: "SAPISID", value: "unit-test-sapisid", domain: ".youtube.com", path: "/", expirationDate: nowSeconds + 3600 },
+      { name: "PREF", value: "unit-test-pref", domain: ".youtube.com", path: "/youtubei/v1", expirationDate: nowSeconds + 3600 },
+      { name: "expired", value: "ignored", domain: ".youtube.com", path: "/", expirationDate: nowSeconds - 3600 },
+      { name: "foreign", value: "ignored", domain: ".example.test", path: "/", expirationDate: nowSeconds + 3600 },
+    ],
+  };
+  const normalizedCookie = normalizeCookieHeader(cookieExport);
+  assert.equal(normalizedCookie, "PREF=unit-test-pref; SID=unit-test-session; SAPISID=unit-test-sapisid");
+  assert.equal(normalizeCookieHeader("Cookie: SID=unit-test-session"), "SID=unit-test-session");
+  assert.throws(
+    () => normalizeCookieHeader("SID=value" + String.fromCharCode(13, 10) + "Injected: yes"),
+    /newlines/
+  );
+  const cookieApi = new UnifiedMusicAPI({ cookie: cookieExport });
+  const authenticatedHeaders = cookieApi.buildClientHeaders("WEB_REMIX");
+  assert.equal(authenticatedHeaders.Cookie, normalizedCookie);
+  const authMatch = /^SAPISIDHASH (\d+)_([a-f0-9]{40})$/.exec(authenticatedHeaders.Authorization || "");
+  assert.ok(authMatch, "SAPISID should produce an InnerTube SAPISIDHASH Authorization header");
+  const expectedAuthHash = crypto
+    .createHash("sha1")
+    .update(`${authMatch[1]} unit-test-sapisid https://music.youtube.com`)
+    .digest("hex");
+  assert.equal(authMatch[2], expectedAuthHash);
+  console.log("  Browser cookie export accepted; expired/foreign entries filtered; auth hash generated without logging values.");
+
+  console.log("\n=== 1. Testing UniversalCipherEngine across ES5 & ES6 player bundles + Registry ===");
   const bundles = [
     ["ea6f527e", path.join(__dirname, "reserver-ytb-js/test/fixtures/player/base-ea6f527e.js")],
     ["f4c47414-ias-es5", path.join(__dirname, "youtube-player-scripts/player_ias.vflset/en_US/base.js")],

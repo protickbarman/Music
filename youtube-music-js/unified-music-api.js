@@ -71,6 +71,136 @@ export {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const YTM_COOKIE_HOST = "music.youtube.com";
+const YTM_COOKIE_PATH = "/youtubei/v1";
+
+function cookiePathMatches(cookiePath) {
+  const candidate = cookiePath.startsWith("/") ? cookiePath : "/";
+  return (
+    YTM_COOKIE_PATH === candidate ||
+    YTM_COOKIE_PATH.startsWith(candidate.endsWith("/") ? candidate : `${candidate}/`)
+  );
+}
+
+function cookieDomainMatches(cookieDomain) {
+  const domain = String(cookieDomain || "").toLowerCase().replace(/^\.+/, "");
+  return Boolean(domain) && (domain === YTM_COOKIE_HOST || YTM_COOKIE_HOST.endsWith(`.${domain}`));
+}
+
+/**
+ * Accepts a Cookie header or a browser-exported cookie array/object and builds
+ * a safe Cookie header scoped to YouTube Music. Cookie values are never logged.
+ */
+export function normalizeCookieHeader(input) {
+  if (input == null) return "";
+  if (typeof input === "string") {
+    const header = input.trim().replace(/^cookie:\s*/i, "");
+    if (/[\r\n]/.test(header)) throw new TypeError("Cookie header must not contain newlines");
+    return header;
+  }
+
+  const cookies = Array.isArray(input) ? input : input?.cookies;
+  if (!Array.isArray(cookies)) {
+    throw new TypeError("cookie must be a header string, cookie array, or browser-export object with a cookies array");
+  }
+
+  let exportHost = "";
+  if (!Array.isArray(input) && input?.url) {
+    try {
+      exportHost = new URL(input.url).hostname.toLowerCase();
+    } catch {
+      // A malformed export URL is ignored; entries still need an explicit YouTube domain.
+    }
+  }
+
+  const nowSeconds = Date.now() / 1000;
+  const seen = new Set();
+  const selected = [];
+  for (const cookie of cookies) {
+    if (!cookie || typeof cookie !== "object") continue;
+    const name = String(cookie.name || "");
+    const value = cookie.value == null ? "" : String(cookie.value);
+    const domain = String(cookie.domain || exportHost || "").toLowerCase();
+    const cookiePath = typeof cookie.path === "string" && cookie.path ? cookie.path : "/";
+    if (!cookieDomainMatches(domain) || !cookiePathMatches(cookiePath)) continue;
+    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || /[\r\n;]/.test(value)) continue;
+
+    const expiry = cookie.expirationDate ?? cookie.expires;
+    if (expiry != null && expiry !== "" && !cookie.session) {
+      let expirySeconds = Number(expiry);
+      if (!Number.isFinite(expirySeconds)) {
+        const parsedExpiry = Date.parse(String(expiry));
+        expirySeconds = Number.isFinite(parsedExpiry) ? parsedExpiry / 1000 : NaN;
+      } else if (expirySeconds > 1e12) {
+        expirySeconds /= 1000;
+      }
+      if (Number.isFinite(expirySeconds) && expirySeconds > 0 && expirySeconds <= nowSeconds) continue;
+    }
+
+    const key = JSON.stringify([name, domain, cookiePath]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    selected.push({ name, value, pathLength: cookiePath.length });
+  }
+
+  if (selected.length === 0) {
+    throw new Error("No usable, unexpired YouTube cookies were found in the supplied export");
+  }
+  selected.sort((left, right) => right.pathLength - left.pathLength);
+  return selected.map(({ name, value }) => `${name}=${value}`).join("; ");
+}
+
+function cookieInputFromEnvironment() {
+  if (process.env.YTM_COOKIE) return process.env.YTM_COOKIE;
+  const cookieFile = process.env.YTM_COOKIE_FILE;
+  if (!cookieFile) return null;
+
+  let contents;
+  try {
+    contents = fs.readFileSync(path.resolve(cookieFile), "utf8").trim();
+  } catch {
+    throw new Error("Unable to read YTM_COOKIE_FILE; check the local path and permissions");
+  }
+  if (!contents) return "";
+  if (contents.startsWith("{") || contents.startsWith("[")) {
+    try {
+      return JSON.parse(contents);
+    } catch {
+      throw new Error("YTM_COOKIE_FILE contains invalid JSON");
+    }
+  }
+  return contents;
+}
+
+function resolveCookieInput(options) {
+  if (Object.prototype.hasOwnProperty.call(options, "cookie")) return options.cookie;
+  return cookieInputFromEnvironment();
+}
+
+function cookieValueFromHeader(cookieHeader, names) {
+  const wanted = new Set(names);
+  for (const part of String(cookieHeader || "").split(/;\s*/)) {
+    const separator = part.indexOf("=");
+    if (separator <= 0) continue;
+    const name = part.slice(0, separator).trim();
+    if (wanted.has(name)) return part.slice(separator + 1);
+  }
+  return null;
+}
+
+function sapisidAuthorization(cookieHeader, origin) {
+  const sapisid = cookieValueFromHeader(cookieHeader, [
+    "SAPISID",
+    "__Secure-1PAPISID",
+    "__Secure-3PAPISID",
+    "APISID",
+  ]);
+  if (!sapisid || !origin) return null;
+  const timestamp = Math.floor(Date.now() / 1000);
+  const digest = crypto.createHash("sha1").update(`${timestamp} ${sapisid} ${origin}`).digest("hex");
+  return `SAPISIDHASH ${timestamp}_${digest}`;
+}
+
 // ============================================================================
 // 1. CLIENT REGISTRY (Merged from limusic `clients.json` + Music-Aura + Glass-Music)
 // ============================================================================
@@ -1028,7 +1158,7 @@ export class UnifiedMusicAPI {
   constructor(options = {}) {
     this.hl = options.hl || "en";
     this.gl = options.gl || "US";
-    this.cookie = options.cookie || null;
+    this.cookie = normalizeCookieHeader(resolveCookieInput(options));
     this.fetchImpl = options.fetchImpl || fetch;
     this.gdStudio =
       options.gdStudioResolver ||
@@ -1127,6 +1257,8 @@ export class UnifiedMusicAPI {
     };
     if (this.cookie && client.loginSupported) {
       headers["Cookie"] = this.cookie;
+      const authorization = sapisidAuthorization(this.cookie, headers.Origin);
+      if (authorization) headers.Authorization = authorization;
     }
     return headers;
   }

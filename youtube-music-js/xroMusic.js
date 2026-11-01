@@ -28,6 +28,7 @@ import {
   validateStreamUrl,
   selectBestAudioFormat,
   isYouTubeStreamHost,
+  normalizeCookieHeader,
 } from "./unified-music-api.js";
 
 // Innertube search filter params (`EgWKAQ...` protobuf base64)
@@ -69,10 +70,10 @@ export class XroMusicClient {
 
   /**
    * xroMusic.init(options)
-   * Initializes visitorData, poToken, cipher VM, and optional loopback audio proxy.
+   * Initializes visitorData, poToken, cipher VM, optional auth cookie/export, and loopback audio proxy.
    */
   async init(options = {}) {
-    if (options.cookie) this.core.cookie = options.cookie;
+    if (options.cookie !== undefined) this.core.cookie = normalizeCookieHeader(options.cookie);
     if (options.hl) this.core.hl = options.hl;
     if (options.gl) this.core.gl = options.gl;
     if (options.startProxy) {
@@ -91,10 +92,10 @@ export class XroMusicClient {
 
   /**
    * xroMusic.setAuth({ cookie, listenBrainzToken, lastFmApiKey })
-   * Optional: sets YouTube Music cookie (for private uploads / 18+ tracks) & scrobble tokens.
+   * Accepts a Cookie header or browser-exported cookies object; use local secrets only.
    */
   setAuth({ cookie, visitorData, poToken, listenBrainzToken, lastFmApiKey, lastFmSessionKey } = {}) {
-    if (cookie !== undefined) this.core.cookie = cookie;
+    if (cookie !== undefined) this.core.cookie = normalizeCookieHeader(cookie);
     if (visitorData) this.core.visitorData = visitorData;
     if (poToken) this.core.poToken = poToken;
     if (listenBrainzToken !== undefined) this._scrobbleConfig.listenBrainzToken = listenBrainzToken;
